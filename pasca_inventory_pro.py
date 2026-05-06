@@ -9,33 +9,9 @@ from PIL import Image
 from io import BytesIO
 
 # ==========================================
-# CONFIGURACIÓN UI
+# CONFIG UI
 # ==========================================
 st.set_page_config(page_title="PASCA Inventory Audit Pro", layout="wide")
-
-st.markdown("""
-<style>
-.stNumberInput label { font-size: 18px !important; font-weight: bold !important; }
-.big-font {
-    font-size: 36px !important;
-    font-weight: bold !important;
-    text-align: center !important;
-    color: white !important;
-    background-color: #2E7D32 !important;
-    padding: 20px !important;
-    border-radius: 15px !important;
-    margin: 20px 0 !important;
-}
-.product-header {
-    background: white !important;
-    padding: 25px !important;
-    border-radius: 20px !important;
-    border-left: 12px solid #4CAF50 !important;
-    margin-bottom: 25px !important;
-    box-shadow: 0px 2px 10px rgba(0,0,0,0.1) !important;
-}
-</style>
-""", unsafe_allow_html=True)
 
 # ==========================================
 # UTILIDADES
@@ -46,33 +22,49 @@ def clean_code(val):
     return val[:-2] if val.endswith(".0") else val
 
 # ==========================================
-# IA (VISION)
+# IA CON FALLBACK (ANTI-429)
 # ==========================================
 def identify_product_vision(image, api_key, model_name):
     try:
         genai.configure(api_key=api_key)
-        model_ai = genai.GenerativeModel(model_name)
+
+        modelos = [
+            "models/gemini-2.5-flash",
+            "models/gemini-2.0-flash",
+            "models/gemini-2.0-flash-lite"
+        ]
+
+        if model_name not in modelos:
+            modelos.insert(0, model_name)
 
         buffer = BytesIO()
         image.convert("RGB").save(buffer, format="JPEG")
+        img_bytes = buffer.getvalue()
 
         prompt = (
-            "Observa la imagen del producto agroquímico. "
-            "Lee cuidadosamente la etiqueta. "
-            "Extrae el nombre comercial exacto o el código del producto. "
-            "Prioriza códigos alfanuméricos visibles. "
-            "Devuelve SOLO el resultado, sin explicación."
+            "Lee la etiqueta del producto agroquímico. "
+            "Devuelve SOLO el nombre o código exacto."
         )
 
-        response = model_ai.generate_content([
-            prompt,
-            {"mime_type": "image/jpeg", "data": buffer.getvalue()}
-        ])
+        for m in modelos:
+            try:
+                model_ai = genai.GenerativeModel(m)
 
-        if not response or not hasattr(response, "text"):
-            return "ERROR: Sin respuesta del modelo"
+                response = model_ai.generate_content([
+                    prompt,
+                    {"mime_type": "image/jpeg", "data": img_bytes}
+                ])
 
-        return response.text.strip().upper()
+                if response and hasattr(response, "text"):
+                    return response.text.strip().upper()
+
+            except Exception as e:
+                if "429" in str(e):
+                    continue
+                else:
+                    return f"ERROR: {str(e)}"
+
+        return "ERROR: Sin cuota disponible"
 
     except Exception as e:
         return f"ERROR: {str(e)}"
@@ -179,11 +171,11 @@ with st.sidebar:
     if not api_key:
         api_key = st.text_input("API Key", type="password")
     else:
-        st.success("✅ API Key cargada desde Secrets")
+        st.success("API Key cargada")
 
     model_choice = st.selectbox("Modelo IA", [
         "models/gemini-2.5-flash",
-        "models/gemini-2.5-pro",
+        "models/gemini-2.0-flash",
         "models/gemini-2.0-flash-lite"
     ])
 
@@ -207,7 +199,6 @@ if uploaded_file:
     df_sistema = st.session_state.df_sistema
     wb = st.session_state.wb
 
-    # ---------- IA ----------
     st.subheader("📷 Identificación")
     img_file = st.camera_input("Foto del producto")
 
@@ -217,7 +208,7 @@ if uploaded_file:
         else:
             img = Image.open(img_file)
 
-            with st.spinner("Analizando etiqueta..."):
+            with st.spinner("Analizando..."):
                 detected = identify_product_vision(img, api_key, model_choice)
 
             if detected.startswith("ERROR"):
@@ -238,19 +229,15 @@ if uploaded_file:
                         st.session_state.selected_name = res.iloc[0, 1]
                         st.rerun()
                     else:
-                        st.write("### 🎯 Selecciona la presentación:")
                         for idx in res.index:
-                            n = res.iloc[res.index.get_loc(idx), 1]
-                            c = clean_code(res.iloc[res.index.get_loc(idx), 0])
+                            name = res.iloc[res.index.get_loc(idx), 1]
+                            code = clean_code(res.iloc[res.index.get_loc(idx), 0])
 
-                            if st.button(f"{n} ({c})", key=f"sel_{c}"):
-                                st.session_state.selected_code = c
-                                st.session_state.selected_name = n
+                            if st.button(f"{name} ({code})"):
+                                st.session_state.selected_code = code
+                                st.session_state.selected_name = name
                                 st.rerun()
-                else:
-                    st.error("Producto no encontrado")
 
-    # ---------- EDITOR ----------
     if "selected_code" in st.session_state:
 
         code = st.session_state.selected_code
@@ -267,40 +254,41 @@ if uploaded_file:
         else:
             idx = idxs[0]
 
-        st.markdown(f"""
-        <div class="product-header">
-        <b>{name}</b><br>
-        Código: {code} | Stock: {stock}
-        </div>
-        """, unsafe_allow_html=True)
+        st.write(f"{name} | Código: {code} | Stock: {stock}")
 
         cols = ["BO1","BO2","BO3","AL1","AL2","AL3","VALES","VENCIDOS"]
-        values = df_conteo.iloc[idx, 3:11].fillna(0).astype(int)
+
+        values = (
+            df_conteo.iloc[idx, 3:11]
+            .fillna(0)
+            .astype(int)
+            .tolist()
+        )
+
+        while len(values) < 8:
+            values.append(0)
 
         inputs = {}
+
         for i, col in enumerate(cols):
             inputs[col] = st.number_input(col, 0, value=int(values[i]))
 
         total = sum(inputs.values())
-        st.markdown(f"<div class='big-font'>TOTAL: {total}</div>", unsafe_allow_html=True)
+        st.write("TOTAL:", total)
 
-        if st.button("GUARDAR", type="primary"):
+        if st.button("GUARDAR"):
             map_cols = {"BO1":3,"BO2":4,"BO3":5,"AL1":6,"AL2":7,"AL3":8,"VALES":9,"VENCIDOS":10}
             for k, v in inputs.items():
                 df_conteo.iloc[idx, map_cols[k]] = v
+
             df_conteo.iloc[idx, 11] = total
             st.success("Guardado")
 
-    # ---------- EXPORT ----------
-    st.divider()
-
     if st.button("EXPORTAR"):
         data = save_full_audit(df_conteo, df_sistema, wb)
-        filename = f"INVENTARIO_{sucursal}_{fecha}.xlsx"
 
         st.download_button(
             "Descargar Excel",
             data,
-            file_name=filename,
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            file_name=f"INVENTARIO_{sucursal}_{fecha}.xlsx"
         )
