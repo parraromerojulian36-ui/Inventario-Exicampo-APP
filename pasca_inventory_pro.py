@@ -6,7 +6,7 @@ import tempfile
 from datetime import datetime
 import google.generativeai as genai
 from PIL import Image
-
+from io import BytesIO
 
 # ==========================================
 # CONFIGURACIÓN UI
@@ -37,7 +37,6 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-
 # ==========================================
 # UTILIDADES
 # ==========================================
@@ -47,50 +46,27 @@ def clean_code(val):
     val = str(val).strip()
     return val[:-2] if val.endswith(".0") else val
 
-
 # ==========================================
-# IA (VISION)
+# IA (VISION) - FIX PRO
 # ==========================================
 def identify_product_vision(image, api_key, model):
     try:
-        from io import BytesIO
-
         genai.configure(api_key=api_key)
 
-        # 🔥 Modelos fallback (evita error 404)
-        fallback_models = [
-            "gemini-1.5-flash-latest",
-            "gemini-1.5-flash-001",
-            "gemini-2.0-flash"
-        ]
+        model_ai = genai.GenerativeModel(model)
 
-        # Si el usuario selecciona modelo, lo intentamos primero
-        if model:
-            fallback_models.insert(0, model)
-
-        model_ai = None
-        last_error = None
-
-        # 🔄 Intentar modelos disponibles
-        for m in fallback_models:
-            try:
-                model_ai = genai.GenerativeModel(m)
-                break
-            except Exception as e:
-                last_error = e
-
-        if model_ai is None:
-            raise Exception(f"No se pudo cargar ningún modelo: {last_error}")
-
-        # 🔧 Convertir imagen a bytes (CLAVE)
+        # Convertir imagen a bytes
         buffer = BytesIO()
         image.convert("RGB").save(buffer, format="JPEG")
         image_bytes = buffer.getvalue()
 
         prompt = (
-            "Analiza la etiqueta del producto agroquímico. "
-            "Extrae el nombre comercial exacto o el código numérico. "
-            "Devuelve SOLO el texto encontrado, sin explicaciones."
+            "Observa la imagen del producto agroquímico. "
+            "Lee cuidadosamente la etiqueta. "
+            "Identifica el nombre comercial exacto o el código del producto. "
+            "Prioriza códigos alfanuméricos visibles. "
+            "Ignora advertencias o texto irrelevante. "
+            "Devuelve SOLO el resultado, sin explicación."
         )
 
         response = model_ai.generate_content(
@@ -110,7 +86,6 @@ def identify_product_vision(image, api_key, model):
 
     except Exception as e:
         return f"ERROR: {str(e)}"
-
 
 # ==========================================
 # DATA
@@ -143,7 +118,6 @@ def load_pasca_data(uploaded_file):
 
     return df_conteo, df_sistema, wb
 
-
 def save_full_audit(df_conteo, df_sistema, wb):
     sheet = wb['CONTEO_F']
 
@@ -159,7 +133,6 @@ def save_full_audit(df_conteo, df_sistema, wb):
         for col_num, value in enumerate(row.values, 1):
             sheet.cell(row=row_num, column=col_num).value = value
 
-    # RESULTADO
     sheet_res = wb['RESULTADO']
 
     for row in sheet_res.iter_rows(min_row=5):
@@ -205,7 +178,6 @@ def save_full_audit(df_conteo, df_sistema, wb):
 
     return data
 
-
 # ==========================================
 # UI
 # ==========================================
@@ -214,22 +186,16 @@ st.title("📦 PASCA Inventory Audit Pro")
 with st.sidebar:
     api_key = st.text_input("API Key", type="password")
 
-    import google.generativeai as genai
-
-    if api_key and st.checkbox("🔎 Ver modelos disponibles"):
-        genai.configure(api_key=api_key)
-
-        st.subheader("Modelos disponibles:")
-
-        for m in genai.list_models():
-            if "generateContent" in m.supported_generation_methods:
-                st.write(m.name)
+    model = st.selectbox("Modelo IA", [
+        "models/gemini-2.5-flash",
+        "models/gemini-2.5-pro",
+        "models/gemini-2.0-flash-lite"
+    ])
 
     sucursal = st.selectbox("Sucursal", ["PASCA", "SUBIA", "SIBATE", "GRANADA"])
     fecha = datetime.now().strftime("%d-%m-%Y")
 
 uploaded_file = st.file_uploader("Sube Excel", type=["xlsx"])
-
 
 # ==========================================
 # APP
