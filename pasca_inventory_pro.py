@@ -6,33 +6,12 @@ import tempfile
 from datetime import datetime
 
 # ==========================================
-# CONFIGURACIÓN DE INTERFAZ
+# CONFIGURACIÓN
 # ==========================================
-st.set_page_config(page_title="PASCA Inventory System", layout="wide")
-
-st.markdown("""
-<style>
-.stNumberInput label { font-size: 18px !important; font-weight: bold !important; }
-.big-font {
-    font-size: 36px !important;
-    font-weight: bold;
-    text-align: center;
-    color: #ffffff;
-    background-color: #2E7D32;
-    padding: 20px;
-    border-radius: 15px;
-}
-.product-header {
-    background-color: #ffffff;
-    padding: 25px;
-    border-radius: 20px;
-    border-left: 12px solid #4CAF50;
-}
-</style>
-""", unsafe_allow_html=True)
+st.set_page_config(page_title="PASCA Inventory Audit", layout="wide")
 
 # ==========================================
-# FUNCIONES AUXILIARES
+# UTILIDADES
 # ==========================================
 def clean_code(val):
     if pd.isna(val):
@@ -40,7 +19,9 @@ def clean_code(val):
     s = str(val).strip()
     return s[:-2] if s.endswith(".0") else s
 
-
+# ==========================================
+# CARGA DE DATOS
+# ==========================================
 def load_pasca_data(uploaded_file):
     with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as tmp:
         tmp.write(uploaded_file.getvalue())
@@ -49,35 +30,51 @@ def load_pasca_data(uploaded_file):
     wb = openpyxl.load_workbook(tmp_path)
 
     df_sistema = pd.read_excel(tmp_path, sheet_name='SISTEMA')
+    df_sistema.columns = df_sistema.columns.str.strip()
     df_sistema.iloc[:, 0] = df_sistema.iloc[:, 0].apply(clean_code)
 
     df_conteo = pd.read_excel(tmp_path, sheet_name='CONTEO_F')
 
-    # Detectar encabezado
+    header_row_index = 0
     for i, row in df_conteo.iterrows():
         if "CODIGO" in str(row.values).upper():
-            df_conteo.columns = df_conteo.iloc[i]
-            df_conteo = df_conteo.iloc[i+1:].reset_index(drop=True)
+            header_row_index = i
             break
 
+    df_conteo.columns = df_conteo.iloc[header_row_index].str.strip()
+    df_conteo = df_conteo.iloc[header_row_index + 1:].reset_index(drop=True)
+    df_conteo = df_conteo.astype(object)
     df_conteo.iloc[:, 0] = df_conteo.iloc[:, 0].apply(clean_code)
 
     st.session_state.temp_file_path = tmp_path
     return df_conteo, df_sistema, wb
 
+# ==========================================
+# GUARDADO FINAL
+# ==========================================
+def save_full_audit_inventory(df_conteo, df_sistema, wb):
 
-def save_full_inventory(df_conteo, df_sistema, wb):
-    # --- Guardar conteo ---
+    # --- A. GUARDAR CONTEO_F ---
     sheet_conteo = wb['CONTEO_F']
 
-    for i, row in df_conteo.iterrows():
-        for j, value in enumerate(row.values, 1):
-            sheet_conteo.cell(row=i+2, column=j).value = value
+    start_row_c = 1
+    for row in sheet_conteo.iter_rows(max_row=10):
+        for cell in row:
+            if cell.value and "CODIGO" in str(cell.value).upper():
+                start_row_c = cell.row + 1
+                break
+        else:
+            continue
+        break
 
-    # --- Hoja resultado ---
+    for i, row in df_conteo.iterrows():
+        row_num = start_row_c + i
+        for col_num, value in enumerate(row.values, 1):
+            sheet_conteo.cell(row=row_num, column=col_num).value = value
+
+    # --- B. RESULTADO ---
     sheet_res = wb['RESULTADO']
 
-    # Limpiar
     for row in sheet_res.iter_rows(min_row=5):
         for cell in row:
             cell.value = None
@@ -129,7 +126,7 @@ def save_full_inventory(df_conteo, df_sistema, wb):
 # ==========================================
 # INTERFAZ
 # ==========================================
-st.title("📦 PASCA Inventory System")
+st.title("📦 PASCA Inventory Audit")
 
 with st.sidebar:
     sucursal = st.selectbox("Sucursal", ["PASCA", "SUBIA", "SIBATE", "GRANADA"])
@@ -138,6 +135,7 @@ with st.sidebar:
 uploaded_file = st.file_uploader("Sube el Excel", type=["xlsx"])
 
 if uploaded_file:
+
     if 'df_inv' not in st.session_state:
         df_c, df_s, wb = load_pasca_data(uploaded_file)
         st.session_state.df_inv = df_c
@@ -146,11 +144,16 @@ if uploaded_file:
 
     df_conteo = st.session_state.df_inv
     df_sistema = st.session_state.df_sistema
+    wb = st.session_state.wb
 
-    search = st.text_input("Buscar producto").upper()
+    search_term = st.text_input("Buscar producto").strip().upper()
 
-    if search:
-        mask = df_sistema.iloc[:, 0].astype(str) == search
+    if search_term:
+        mask = (
+            (df_sistema.iloc[:, 0].astype(str) == search_term) |
+            (df_sistema.iloc[:, 1].astype(str).str.contains(search_term, case=False))
+        )
+
         res = df_sistema[mask]
 
         if not res.empty:
@@ -159,10 +162,10 @@ if uploaded_file:
 
             st.write(name)
 
-            idx = df_conteo[df_conteo.iloc[:, 0] == code].index
+            idx_list = df_conteo[df_conteo.iloc[:, 0] == code].index
 
-            if not idx.empty:
-                idx = idx[0]
+            if not idx_list.empty:
+                idx = idx_list[0]
 
                 inputs = []
                 for i in range(8):
@@ -179,9 +182,11 @@ if uploaded_file:
 
                     df_conteo.iloc[idx, 11] = total
                     st.success("Guardado")
+        else:
+            st.error("Producto no encontrado")
 
     if st.button("Exportar"):
-        data = save_full_inventory(df_conteo, df_sistema, st.session_state.wb)
+        data = save_full_audit_inventory(df_conteo, df_sistema, wb)
 
         st.download_button(
             "Descargar Excel",
