@@ -8,6 +8,12 @@ import google.generativeai as genai
 from PIL import Image
 from io import BytesIO
 
+# OCR
+import pytesseract
+import cv2
+import numpy as np
+import re
+
 # ==========================================
 # CONFIG UI
 # ==========================================
@@ -22,10 +28,36 @@ def clean_code(val):
     return val[:-2] if val.endswith(".0") else val
 
 # ==========================================
-# IA CON FALLBACK (ANTI-429)
+# PREPROCESAMIENTO OCR
 # ==========================================
-def identify_product_vision(image, api_key, model_name):
+def preprocess_image(image):
+    img = np.array(image)
+    gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
+    _, thresh = cv2.threshold(gray, 150, 255, cv2.THRESH_BINARY)
+    return thresh
+
+# ==========================================
+# IA HÍBRIDA (OCR + GEMINI)
+# ==========================================
+def identify_product_hybrid(image, api_key, model_name):
     try:
+        # ==============================
+        # 1. OCR GRATIS
+        # ==============================
+        processed = preprocess_image(image)
+        text = pytesseract.image_to_string(processed)
+
+        text_clean = text.upper().strip()
+
+        match = re.findall(r"\b[A-Z0-9]{6,}\b", text_clean)
+
+        if match:
+            best_match = sorted(match, key=len, reverse=True)[0]
+            return best_match
+
+        # ==============================
+        # 2. GEMINI (FALLBACK)
+        # ==============================
         genai.configure(api_key=api_key)
 
         modelos = [
@@ -43,7 +75,8 @@ def identify_product_vision(image, api_key, model_name):
 
         prompt = (
             "Lee la etiqueta del producto agroquímico. "
-            "Devuelve SOLO el nombre o código exacto."
+            "Extrae el nombre o código exacto. "
+            "Devuelve SOLO el resultado."
         )
 
         for m in modelos:
@@ -209,7 +242,7 @@ if uploaded_file:
             img = Image.open(img_file)
 
             with st.spinner("Analizando..."):
-                detected = identify_product_vision(img, api_key, model_choice)
+                detected = identify_product_hybrid(img, api_key, model_choice)
 
             if detected.startswith("ERROR"):
                 st.error(detected)
