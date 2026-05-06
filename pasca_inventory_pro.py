@@ -36,6 +36,17 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ==========================================
+# UTILIDAD
+# ==========================================
+def clean_code(val):
+    if pd.isna(val):
+        return ""
+    s = str(val).strip()
+    if s.endswith('.0'):
+        s = s[:-2]
+    return s
+
+# ==========================================
 # LÓGICA DE DATOS
 # ==========================================
 def load_pasca_data(file):
@@ -45,13 +56,15 @@ def load_pasca_data(file):
     df_pres.columns = df_pres.columns.str.strip()
 
     mapping_pres = {}
+
     for _, row in df_pres.iterrows():
         name = str(row['DESCRIPCION']).strip().upper()
-        code = str(row['CODIGO']).strip()
+        code = clean_code(row['CODIGO'])
         factor = row['PRESENTACION'] if pd.notnull(row['PRESENTACION']) else 1
 
         mapping_pres[name] = {'factor': factor, 'code': code}
-        mapping_pres[code] = {'factor': factor, 'code': code}
+        if code:
+            mapping_pres[code] = {'factor': factor, 'code': code}
 
     df_conteo = pd.read_excel(file, sheet_name='CONTEO_F')
 
@@ -63,6 +76,9 @@ def load_pasca_data(file):
 
     df_conteo.columns = df_conteo.iloc[header_row_index].str.strip()
     df_conteo = df_conteo.iloc[header_row_index + 1:].reset_index(drop=True)
+
+    # limpiar códigos
+    df_conteo.iloc[:, 0] = df_conteo.iloc[:, 0].apply(clean_code)
 
     return df_conteo, wb, mapping_pres
 
@@ -86,7 +102,6 @@ def save_to_excel(df_conteo, wb):
     wb.save(output)
     return output.getvalue()
 
-
 # ==========================================
 # APP
 # ==========================================
@@ -99,7 +114,7 @@ with st.sidebar:
     st.session_state.selected_bodega = st.selectbox("Bodega Actual", bodegas)
     st.info("Modo: Búsqueda Rápida y Manual")
 
-# CARGA ARCHIVO
+# CARGA
 uploaded_file = st.file_uploader("Cargar Plantilla de Sistema", type=["xlsx"])
 
 if uploaded_file:
@@ -122,7 +137,7 @@ if uploaded_file:
     with col_search:
         st.subheader("🔍 Buscar Producto")
 
-        search_term = st.text_input("Escribe el nombre o código...", "").upper()
+        search_term = st.text_input("Escribe el nombre o código...", "").strip().upper()
 
         if search_term:
             matches = [k for k in mapping.keys() if search_term in k]
@@ -130,11 +145,11 @@ if uploaded_file:
             if matches:
                 st.write(f"Encontrados {len(matches)} productos:")
 
-                for m in matches[:10]:
+                for m in matches[:15]:
                     if st.button(f"👉 {m}"):
                         st.session_state.selected_prod = m
             else:
-                st.error("No se encontró ningún producto.")
+                st.error("No se encontró coincidencia en la hoja 'PRESENTACIÓN'.")
 
     # ==========================================
     # CONTEO
@@ -149,7 +164,7 @@ if uploaded_file:
             factor = prod_info['factor']
             code = prod_info['code']
 
-            mask = df.iloc[:, 0].astype(str).str.strip() == str(code).strip()
+            mask = df.iloc[:, 0] == code
             prod_row_idx = df[mask].index
 
             if not prod_row_idx.empty:
@@ -159,7 +174,7 @@ if uploaded_file:
                 st.markdown(f"""
                 <div class="product-card">
                     <div class="big-font">{prod_name}</div>
-                    <p><b>Código:</b> {code} | <b>Factor:</b> {factor}</p>
+                    <p><b>Código:</b> {code} | <b>Factor Caja:</b> {factor}</p>
                 </div>
                 """, unsafe_allow_html=True)
 
@@ -169,7 +184,7 @@ if uploaded_file:
                     cajas = st.number_input("📦 Cajas", min_value=0, step=1)
 
                 with c2:
-                    sueltos = st.number_input("Unidades", min_value=0, step=1)
+                    sueltos = st.number_input("Unidades Sueltas", min_value=0, step=1)
 
                 total = (cajas * factor) + sueltos
 
@@ -189,7 +204,7 @@ if uploaded_file:
                     st.success(f"Guardado {total} en {st.session_state.selected_bodega}")
 
             else:
-                st.error("El producto no está en la hoja de conteo.")
+                st.error(f"El código {code} no se encontró en la hoja 'CONTEO_F'.")
 
     # ==========================================
     # EXPORTAR
