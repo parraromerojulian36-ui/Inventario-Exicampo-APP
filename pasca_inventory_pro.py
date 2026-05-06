@@ -1,7 +1,6 @@
 import streamlit as st
 import pandas as pd
 import openpyxl
-from io import BytesIO
 import os
 import tempfile
 from datetime import datetime
@@ -12,14 +11,14 @@ from PIL import Image
 # ==========================================
 # CONFIGURACIÓN UI
 # ==========================================
-st.set_page_config(page_title="PASCA Inventory Audit", layout="wide")
+st.set_page_config(page_title="PASCA Inventory Audit Pro", layout="wide")
 
 st.markdown("""
 <style>
 .stNumberInput label { font-size: 18px !important; font-weight: bold !important; }
 
 .big-font {
-    font-size: 36px !important;
+    font-size: 36px;
     font-weight: bold;
     text-align: center;
     color: white;
@@ -29,24 +28,11 @@ st.markdown("""
 }
 
 .product-header {
-    background-color: white;
+    background: white;
     padding: 25px;
     border-radius: 20px;
     border-left: 12px solid #4CAF50;
     margin-bottom: 25px;
-}
-
-div.stButton > button {
-    width: 100%;
-    height: 60px;
-    font-size: 18px;
-}
-
-.stButton > button[kind="primary"] {
-    height: 80px;
-    font-size: 24px;
-    background-color: #4CAF50;
-    color: white;
 }
 </style>
 """, unsafe_allow_html=True)
@@ -58,24 +44,24 @@ div.stButton > button {
 def clean_code(val):
     if pd.isna(val):
         return ""
-    s = str(val).strip()
-    return s[:-2] if s.endswith('.0') else s
+    val = str(val).strip()
+    return val[:-2] if val.endswith(".0") else val
 
 
 # ==========================================
-# IA - VISIÓN
+# IA (VISION)
 # ==========================================
-def identify_product_vision(image, api_key, model_name):
+def identify_product_vision(image, api_key, model):
     try:
         genai.configure(api_key=api_key)
-        model = genai.GenerativeModel(model_name)
+        model_ai = genai.GenerativeModel(model)
 
         prompt = (
             "Analiza la etiqueta del producto agroquímico. "
-            "Extrae SOLO nombre o código exacto. Sin explicaciones."
+            "Devuelve SOLO el nombre o código exacto."
         )
 
-        response = model.generate_content([prompt, image])
+        response = model_ai.generate_content([prompt, image])
         return response.text.strip().upper()
 
     except Exception as e:
@@ -92,12 +78,10 @@ def load_pasca_data(uploaded_file):
 
     wb = openpyxl.load_workbook(tmp_path)
 
-    # SISTEMA
     df_sistema = pd.read_excel(tmp_path, sheet_name='SISTEMA')
     df_sistema.columns = df_sistema.columns.str.strip()
     df_sistema.iloc[:, 0] = df_sistema.iloc[:, 0].apply(clean_code)
 
-    # CONTEO
     df_conteo = pd.read_excel(tmp_path, sheet_name='CONTEO_F')
 
     header_row = 0
@@ -116,8 +100,7 @@ def load_pasca_data(uploaded_file):
     return df_conteo, df_sistema, wb
 
 
-def save_full_audit_inventory(df_conteo, df_sistema, wb):
-    # ---------- GUARDAR CONTEO ----------
+def save_full_audit(df_conteo, df_sistema, wb):
     sheet = wb['CONTEO_F']
 
     start_row = 1
@@ -132,7 +115,7 @@ def save_full_audit_inventory(df_conteo, df_sistema, wb):
         for col_num, value in enumerate(row.values, 1):
             sheet.cell(row=row_num, column=col_num).value = value
 
-    # ---------- RESULTADO ----------
+    # RESULTADO
     sheet_res = wb['RESULTADO']
 
     for row in sheet_res.iter_rows(min_row=5):
@@ -162,7 +145,6 @@ def save_full_audit_inventory(df_conteo, df_sistema, wb):
 
             row_res += 1
 
-    # ---------- EXPORT ----------
     with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as tmp:
         path = tmp.name
 
@@ -181,21 +163,15 @@ def save_full_audit_inventory(df_conteo, df_sistema, wb):
 
 
 # ==========================================
-# UI PRINCIPAL
+# UI
 # ==========================================
-st.title("📦 PASCA Vision Audit")
+st.title("📦 PASCA Inventory Audit Pro")
 
 with st.sidebar:
-    st.header("🔑 IA")
     api_key = st.text_input("API Key", type="password")
-    model_choice = st.selectbox("Modelo", ["gemini-1.5-flash", "gemma-4-31b"])
-
-    st.divider()
-
-    st.header("🏢 Sucursal")
+    model = st.selectbox("Modelo IA", ["gemini-1.5-flash", "gemma-4-31b"])
     sucursal = st.selectbox("Sucursal", ["PASCA", "SUBIA", "SIBATE", "GRANADA"])
     fecha = datetime.now().strftime("%d-%m-%Y")
-
 
 uploaded_file = st.file_uploader("Sube Excel", type=["xlsx"])
 
@@ -215,44 +191,62 @@ if uploaded_file:
     df_sistema = st.session_state.df_sistema
     wb = st.session_state.wb
 
+    # ---------- IA ----------
+    st.subheader("📷 Identificación")
 
-    # ======================================
-    # VISIÓN IA
-    # ======================================
-    st.subheader("📷 Captura")
+    img_file = st.camera_input("Foto del producto")
 
-    img_file = st.camera_input("Foto producto")
-
-    if img_file and api_key:
-        img = Image.open(img_file)
-
-        with st.spinner("IA analizando..."):
-            detected = identify_product_vision(img, api_key, model_choice)
-
-        if detected.startswith("ERROR"):
-            st.error(detected)
+    if img_file:
+        if not api_key:
+            st.error("Falta API Key")
         else:
-            st.success(f"Detectado: {detected}")
+            img = Image.open(img_file)
 
-            mask = (
-                (df_sistema.iloc[:, 0].astype(str) == detected) |
-                (df_sistema.iloc[:, 1].astype(str).str.contains(detected, case=False))
-            )
+            with st.spinner("Analizando..."):
+                detected = identify_product_vision(img, api_key, model)
 
-            results = df_sistema[mask]
+            if detected.startswith("ERROR"):
+                st.error(detected)
+            else:
+                st.success(f"Detectado: {detected}")
 
-            for idx in results.index:
-                name = results.loc[idx, df_sistema.columns[1]]
-                code = clean_code(results.loc[idx, df_sistema.columns[0]])
+                mask = (
+                    (df_sistema.iloc[:, 0].astype(str) == detected) |
+                    (df_sistema.iloc[:, 1].astype(str).str.contains(detected, case=False))
+                )
 
-                if st.button(f"{name} ({code})", key=f"sel_{code}"):
-                    st.session_state.selected_code = code
-                    st.session_state.selected_name = name
+                res = df_sistema[mask]
 
+                for idx in res.index:
+                    name = res.iloc[res.index.get_loc(idx), 1]
+                    code = clean_code(res.iloc[res.index.get_loc(idx), 0])
 
-    # ======================================
-    # EDICIÓN
-    # ======================================
+                    if st.button(f"{name} ({code})", key=f"sel_{code}"):
+                        st.session_state.selected_code = code
+                        st.session_state.selected_name = name
+
+    # ---------- BUSCADOR ----------
+    st.subheader("🔍 Búsqueda")
+
+    search = st.text_input("Código o nombre").upper()
+
+    if search:
+        mask = (
+            (df_sistema.iloc[:, 0].astype(str) == search) |
+            (df_sistema.iloc[:, 1].astype(str).str.contains(search, case=False))
+        )
+
+        res = df_sistema[mask]
+
+        for idx in res.index:
+            name = res.iloc[res.index.get_loc(idx), 1]
+            code = clean_code(res.iloc[res.index.get_loc(idx), 0])
+
+            if st.button(f"{name} ({code})", key=f"bus_{code}"):
+                st.session_state.selected_code = code
+                st.session_state.selected_name = name
+
+    # ---------- EDITOR ----------
     if "selected_code" in st.session_state:
 
         code = st.session_state.selected_code
@@ -271,16 +265,16 @@ if uploaded_file:
 
         st.markdown(f"""
         <div class="product-header">
-            <b>{name}</b><br>
-            Código: {code} | Stock: {stock}
+        <b>{name}</b><br>
+        Código: {code} | Stock: {stock}
         </div>
         """, unsafe_allow_html=True)
 
         cols = ["BO1","BO2","BO3","AL1","AL2","AL3","VALES","VENCIDOS"]
-
         values = df_conteo.iloc[idx, 3:11].fillna(0).astype(int)
 
         inputs = {}
+
         for i, col in enumerate(cols):
             inputs[col] = st.number_input(col, 0, value=int(values[i]))
 
@@ -289,28 +283,25 @@ if uploaded_file:
         st.markdown(f"<div class='big-font'>TOTAL: {total}</div>", unsafe_allow_html=True)
 
         if st.button("GUARDAR", type="primary"):
+
             map_cols = {"BO1":3,"BO2":4,"BO3":5,"AL1":6,"AL2":7,"AL3":8,"VALES":9,"VENCIDOS":10}
 
-            for k,v in inputs.items():
+            for k, v in inputs.items():
                 df_conteo.iloc[idx, map_cols[k]] = v
 
             df_conteo.iloc[idx, 11] = total
             st.success("Guardado")
 
-
-    # ======================================
-    # EXPORTAR
-    # ======================================
+    # ---------- EXPORT ----------
     st.divider()
 
     if st.button("EXPORTAR"):
-        file_bytes = save_full_audit_inventory(df_conteo, df_sistema, wb)
-
+        data = save_full_audit(df_conteo, df_sistema, wb)
         filename = f"INVENTARIO_{sucursal}_{fecha}.xlsx"
 
         st.download_button(
-            "Descargar",
-            file_bytes,
+            "Descargar Excel",
+            data,
             file_name=filename,
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
