@@ -10,15 +10,12 @@ st.set_page_config(page_title="PASCA Inventory Pro", layout="wide")
 
 st.markdown("""
 <style>
-.main { background-color: #f5f7f9; }
-
 .stNumberInput label {
     font-size: 18px !important;
     font-weight: bold !important;
 }
-
 .big-font {
-    font-size: 36px !important;
+    font-size: 36px;
     font-weight: bold;
     text-align: center;
     color: white;
@@ -27,7 +24,6 @@ st.markdown("""
     border-radius: 15px;
     margin: 20px 0;
 }
-
 .product-header {
     background-color: white;
     padding: 25px;
@@ -35,11 +31,14 @@ st.markdown("""
     border-left: 12px solid #4CAF50;
     margin-bottom: 25px;
 }
-
 div.stButton > button {
     width: 100%;
     height: 60px;
     font-size: 18px;
+}
+.stButton > button[kind="primary"] {
+    height: 80px;
+    font-size: 24px;
 }
 </style>
 """, unsafe_allow_html=True)
@@ -73,7 +72,6 @@ def load_pasca_data(file):
 
     df_conteo.columns = df_conteo.iloc[header_row_index].str.strip()
     df_conteo = df_conteo.iloc[header_row_index + 1:].reset_index(drop=True)
-
     df_conteo = df_conteo.astype(object)
     df_conteo.iloc[:, 0] = df_conteo.iloc[:, 0].apply(clean_code)
 
@@ -102,13 +100,12 @@ def save_to_excel(df_conteo, wb):
 # APP
 # ==========================================
 st.title("📦 PASCA Inventory Pro")
-st.markdown("Gestión de conteo físico inteligente")
 
-uploaded_file = st.file_uploader("Sube el Excel", type=["xlsx"])
+uploaded_file = st.file_uploader("Sube el Excel del sistema", type=["xlsx"])
 
 if uploaded_file:
 
-    if "data_loaded" not in st.session_state:
+    if 'data_loaded' not in st.session_state:
         df_c, df_s, wb = load_pasca_data(uploaded_file)
         st.session_state.df_conteo = df_c
         st.session_state.df_sistema = df_s
@@ -124,38 +121,50 @@ if uploaded_file:
     # ======================================
     st.subheader("🔍 Buscar Producto")
 
-    search = st.text_input("Código o nombre").upper().strip()
+    search_term = st.text_input("Código o Nombre").strip().upper()
 
-    if search:
+    if search_term:
+
         mask = (
-            (df_sistema.iloc[:, 0].astype(str) == search) |
-            (df_sistema.iloc[:, 1].astype(str).str.contains(search, case=False))
+            (df_sistema.iloc[:, 0].astype(str) == search_term) |
+            (df_sistema.iloc[:, 1].astype(str).str.contains(search_term, case=False))
         )
 
-        results = df_sistema[mask]
+        res = df_sistema[mask]
 
-        if not results.empty:
-            if len(results) > 1:
-                st.warning("Selecciona una opción")
-                for _, r in results.iterrows():
-                    code = clean_code(r.iloc[0])
-                    name = r.iloc[1]
+        if not res.empty:
 
-                    if st.button(f"{name} ({code})"):
+            if len(res) > 1:
+                st.warning("⚠️ Múltiples resultados")
+
+                for i in range(len(res)):
+                    name = res.iloc[i, 1]
+                    code = clean_code(res.iloc[i, 0])
+
+                    if st.button(f"{name} ({code})", key=f"btn_{code}_{i}"):
                         st.session_state.selected = (code, name)
+
             else:
-                r = results.iloc[0]
-                st.session_state.selected = (clean_code(r[0]), r[1])
+                st.session_state.selected = (
+                    clean_code(res.iloc[0, 0]),
+                    res.iloc[0, 1]
+                )
         else:
             st.error("No encontrado")
+            if 'selected' in st.session_state:
+                del st.session_state.selected
 
     # ======================================
     # EDICIÓN
     # ======================================
-    if "selected" in st.session_state:
+    if 'selected' in st.session_state:
+
         code, name = st.session_state.selected
 
-        row_idx = df_conteo[df_conteo.iloc[:, 0] == code].index
+        stock_row = df_sistema[df_sistema.iloc[:, 0].astype(str) == code]
+        stock_sys = stock_row.iloc[0, 2] if not stock_row.empty else "N/A"
+
+        row_idx = df_conteo[df_conteo.iloc[:, 0].astype(str) == code].index
 
         if not row_idx.empty:
             idx = row_idx[0]
@@ -163,22 +172,22 @@ if uploaded_file:
             st.markdown(f"""
             <div class="product-header">
                 <b>{name}</b><br>
-                Código: {code}
+                Código: {code} | Stock: {stock_sys}
             </div>
             """, unsafe_allow_html=True)
 
             cols = ["BO1","BO2","BO3","AL1","AL2","AL3","VALES","VENCIDOS"]
 
-            vals = df_conteo.iloc[idx, 3:11].values
-            vals = [int(v) if pd.notnull(v) else 0 for v in vals]
+            raw = df_conteo.iloc[idx, 3:11].values
+            vals = [int(v) if pd.notnull(v) and str(v).replace('.', '').isdigit() else 0 for v in raw]
 
             inputs = {}
 
-            c1 = st.columns(4)
-            c2 = st.columns(4)
+            r1 = st.columns(4)
+            r2 = st.columns(4)
 
             for i, col in enumerate(cols):
-                container = c1 if i < 4 else c2
+                container = r1 if i < 4 else r2
                 with container[i % 4]:
                     inputs[col] = st.number_input(col, value=vals[i], min_value=0)
 
@@ -187,28 +196,29 @@ if uploaded_file:
             st.markdown(f"<div class='big-font'>TOTAL: {total}</div>", unsafe_allow_html=True)
 
             if st.button("Guardar", type="primary"):
+
                 map_cols = {
                     "BO1":3,"BO2":4,"BO3":5,
                     "AL1":6,"AL2":7,"AL3":8,
                     "VALES":9,"VENCIDOS":10
                 }
 
-                for k,v in inputs.items():
+                for k, v in inputs.items():
                     df_conteo.iloc[idx, map_cols[k]] = v
 
                 df_conteo.iloc[idx, 11] = total
 
-                st.success("Guardado")
+                st.success("Guardado correctamente")
                 st.balloons()
 
         else:
-            st.error("No está en CONTEO_F")
+            st.error("No existe en CONTEO_F")
 
     # ======================================
     # EXPORTAR
     # ======================================
     st.divider()
 
-    if st.button("Exportar Excel"):
+    if st.button("💾 DESCARGAR EXCEL FINAL"):
         data = save_to_excel(df_conteo, wb)
-        st.download_button("Descargar", data, "inventario.xlsx")
+        st.download_button("Descargar archivo", data, "inventario_final.xlsx")
