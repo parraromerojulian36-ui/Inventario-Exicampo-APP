@@ -16,23 +16,23 @@ st.set_page_config(page_title="PASCA Inventory Audit Pro", layout="wide")
 st.markdown("""
 <style>
 .stNumberInput label { font-size: 18px !important; font-weight: bold !important; }
-
 .big-font {
-    font-size: 36px;
-    font-weight: bold;
-    text-align: center;
-    color: white;
-    background-color: #2E7D32;
-    padding: 20px;
-    border-radius: 15px;
+    font-size: 36px !important;
+    font-weight: bold !important;
+    text-align: center !important;
+    color: white !important;
+    background-color: #2E7D32 !important;
+    padding: 20px !important;
+    border-radius: 15px !important;
+    margin: 20px 0 !important;
 }
-
 .product-header {
-    background: white;
-    padding: 25px;
-    border-radius: 20px;
-    border-left: 12px solid #4CAF50;
-    margin-bottom: 25px;
+    background: white !important;
+    padding: 25px !important;
+    border-radius: 20px !important;
+    border-left: 12px solid #4CAF50 !important;
+    margin-bottom: 25px !important;
+    box-shadow: 0px 2px 10px rgba(0,0,0,0.1) !important;
 }
 </style>
 """, unsafe_allow_html=True)
@@ -41,46 +41,36 @@ st.markdown("""
 # UTILIDADES
 # ==========================================
 def clean_code(val):
-    if pd.isna(val):
-        return ""
+    if pd.isna(val): return ""
     val = str(val).strip()
     return val[:-2] if val.endswith(".0") else val
 
 # ==========================================
-# IA (VISION) - FIX PRO
+# IA (VISION)
 # ==========================================
-def identify_product_vision(image, api_key, model):
+def identify_product_vision(image, api_key, model_name):
     try:
         genai.configure(api_key=api_key)
+        model_ai = genai.GenerativeModel(model_name)
 
-        model_ai = genai.GenerativeModel(model)
-
-        # Convertir imagen a bytes
         buffer = BytesIO()
         image.convert("RGB").save(buffer, format="JPEG")
-        image_bytes = buffer.getvalue()
 
         prompt = (
             "Observa la imagen del producto agroquímico. "
             "Lee cuidadosamente la etiqueta. "
-            "Identifica el nombre comercial exacto o el código del producto. "
+            "Extrae el nombre comercial exacto o el código del producto. "
             "Prioriza códigos alfanuméricos visibles. "
-            "Ignora advertencias o texto irrelevante. "
             "Devuelve SOLO el resultado, sin explicación."
         )
 
-        response = model_ai.generate_content(
-            [
-                prompt,
-                {
-                    "mime_type": "image/jpeg",
-                    "data": image_bytes
-                }
-            ]
-        )
+        response = model_ai.generate_content([
+            prompt,
+            {"mime_type": "image/jpeg", "data": buffer.getvalue()}
+        ])
 
         if not response or not hasattr(response, "text"):
-            return "ERROR: Respuesta vacía del modelo"
+            return "ERROR: Sin respuesta del modelo"
 
         return response.text.strip().upper()
 
@@ -115,8 +105,8 @@ def load_pasca_data(uploaded_file):
     df_conteo.iloc[:, 0] = df_conteo.iloc[:, 0].apply(clean_code)
 
     st.session_state.temp_file = tmp_path
-
     return df_conteo, df_sistema, wb
+
 
 def save_full_audit(df_conteo, df_sistema, wb):
     sheet = wb['CONTEO_F']
@@ -149,7 +139,7 @@ def save_full_audit(df_conteo, df_sistema, wb):
         match = df_sistema[df_sistema.iloc[:, 0].astype(str) == code]
 
         if not match.empty:
-            total_sistema = match.iloc[0, 2] or 0
+            total_sistema = match.iloc[0, 2] if pd.notnull(match.iloc[0, 2]) else 0
             diff = total_fisico - total_sistema
 
             sheet_res.cell(row=row_res, column=1).value = code
@@ -183,10 +173,15 @@ def save_full_audit(df_conteo, df_sistema, wb):
 # ==========================================
 st.title("📦 PASCA Inventory Audit Pro")
 
-with st.sidebar:
-    api_key = st.text_input("API Key", type="password")
+api_key = st.secrets.get("GEMINI_API_KEY", "")
 
-    model = st.selectbox("Modelo IA", [
+with st.sidebar:
+    if not api_key:
+        api_key = st.text_input("API Key", type="password")
+    else:
+        st.success("✅ API Key cargada desde Secrets")
+
+    model_choice = st.selectbox("Modelo IA", [
         "models/gemini-2.5-flash",
         "models/gemini-2.5-pro",
         "models/gemini-2.0-flash-lite"
@@ -214,7 +209,6 @@ if uploaded_file:
 
     # ---------- IA ----------
     st.subheader("📷 Identificación")
-
     img_file = st.camera_input("Foto del producto")
 
     if img_file:
@@ -223,8 +217,8 @@ if uploaded_file:
         else:
             img = Image.open(img_file)
 
-            with st.spinner("Analizando..."):
-                detected = identify_product_vision(img, api_key, model)
+            with st.spinner("Analizando etiqueta..."):
+                detected = identify_product_vision(img, api_key, model_choice)
 
             if detected.startswith("ERROR"):
                 st.error(detected)
@@ -238,34 +232,23 @@ if uploaded_file:
 
                 res = df_sistema[mask]
 
-                for idx in res.index:
-                    name = res.iloc[res.index.get_loc(idx), 1]
-                    code = clean_code(res.iloc[res.index.get_loc(idx), 0])
+                if not res.empty:
+                    if len(res) == 1:
+                        st.session_state.selected_code = clean_code(res.iloc[0, 0])
+                        st.session_state.selected_name = res.iloc[0, 1]
+                        st.rerun()
+                    else:
+                        st.write("### 🎯 Selecciona la presentación:")
+                        for idx in res.index:
+                            n = res.iloc[res.index.get_loc(idx), 1]
+                            c = clean_code(res.iloc[res.index.get_loc(idx), 0])
 
-                    if st.button(f"{name} ({code})", key=f"sel_{code}"):
-                        st.session_state.selected_code = code
-                        st.session_state.selected_name = name
-
-    # ---------- BUSCADOR ----------
-    st.subheader("🔍 Búsqueda")
-
-    search = st.text_input("Código o nombre").upper()
-
-    if search:
-        mask = (
-            (df_sistema.iloc[:, 0].astype(str) == search) |
-            (df_sistema.iloc[:, 1].astype(str).str.contains(search, case=False))
-        )
-
-        res = df_sistema[mask]
-
-        for idx in res.index:
-            name = res.iloc[res.index.get_loc(idx), 1]
-            code = clean_code(res.iloc[res.index.get_loc(idx), 0])
-
-            if st.button(f"{name} ({code})", key=f"bus_{code}"):
-                st.session_state.selected_code = code
-                st.session_state.selected_name = name
+                            if st.button(f"{n} ({c})", key=f"sel_{c}"):
+                                st.session_state.selected_code = c
+                                st.session_state.selected_name = n
+                                st.rerun()
+                else:
+                    st.error("Producto no encontrado")
 
     # ---------- EDITOR ----------
     if "selected_code" in st.session_state:
@@ -295,21 +278,16 @@ if uploaded_file:
         values = df_conteo.iloc[idx, 3:11].fillna(0).astype(int)
 
         inputs = {}
-
         for i, col in enumerate(cols):
             inputs[col] = st.number_input(col, 0, value=int(values[i]))
 
         total = sum(inputs.values())
-
         st.markdown(f"<div class='big-font'>TOTAL: {total}</div>", unsafe_allow_html=True)
 
         if st.button("GUARDAR", type="primary"):
-
             map_cols = {"BO1":3,"BO2":4,"BO3":5,"AL1":6,"AL2":7,"AL3":8,"VALES":9,"VENCIDOS":10}
-
             for k, v in inputs.items():
                 df_conteo.iloc[idx, map_cols[k]] = v
-
             df_conteo.iloc[idx, 11] = total
             st.success("Guardado")
 
