@@ -97,7 +97,7 @@ def save_to_excel(df_conteo, wb):
 # ==========================================
 # APP
 # ==========================================
-st.title("📦 PASCA Inventory Editor")
+st.title("Inventario Exicampo")
 st.markdown("Busque un producto → Edite → Guarde")
 
 uploaded_file = st.file_uploader("Cargar Plantilla de Sistema", type=["xlsx"])
