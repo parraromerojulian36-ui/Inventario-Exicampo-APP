@@ -53,15 +53,59 @@ def clean_code(val):
 # ==========================================
 def identify_product_vision(image, api_key, model):
     try:
+        from io import BytesIO
+
         genai.configure(api_key=api_key)
-        model_ai = genai.GenerativeModel(model)
+
+        # 🔥 Modelos fallback (evita error 404)
+        fallback_models = [
+            "gemini-1.5-flash-latest",
+            "gemini-1.5-flash-001",
+            "gemini-2.0-flash"
+        ]
+
+        # Si el usuario selecciona modelo, lo intentamos primero
+        if model:
+            fallback_models.insert(0, model)
+
+        model_ai = None
+        last_error = None
+
+        # 🔄 Intentar modelos disponibles
+        for m in fallback_models:
+            try:
+                model_ai = genai.GenerativeModel(m)
+                break
+            except Exception as e:
+                last_error = e
+
+        if model_ai is None:
+            raise Exception(f"No se pudo cargar ningún modelo: {last_error}")
+
+        # 🔧 Convertir imagen a bytes (CLAVE)
+        buffer = BytesIO()
+        image.convert("RGB").save(buffer, format="JPEG")
+        image_bytes = buffer.getvalue()
 
         prompt = (
             "Analiza la etiqueta del producto agroquímico. "
-            "Devuelve SOLO el nombre o código exacto."
+            "Extrae el nombre comercial exacto o el código numérico. "
+            "Devuelve SOLO el texto encontrado, sin explicaciones."
         )
 
-        response = model_ai.generate_content([prompt, image])
+        response = model_ai.generate_content(
+            [
+                prompt,
+                {
+                    "mime_type": "image/jpeg",
+                    "data": image_bytes
+                }
+            ]
+        )
+
+        if not response or not hasattr(response, "text"):
+            return "ERROR: Respuesta vacía del modelo"
+
         return response.text.strip().upper()
 
     except Exception as e:
@@ -169,7 +213,11 @@ st.title("📦 PASCA Inventory Audit Pro")
 
 with st.sidebar:
     api_key = st.text_input("API Key", type="password")
-    model = st.selectbox("Modelo IA", ["gemini-1.5-flash", "gemma-4-31b"])
+    model = st.selectbox("Modelo IA", [
+    "gemini-1.5-flash-latest",
+    "gemini-1.5-flash-001",
+    "gemini-2.0-flash"
+    ])
     sucursal = st.selectbox("Sucursal", ["PASCA", "SUBIA", "SIBATE", "GRANADA"])
     fecha = datetime.now().strftime("%d-%m-%Y")
 
