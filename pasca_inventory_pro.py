@@ -6,37 +6,36 @@ from io import BytesIO
 # ==========================================
 # CONFIGURACIÓN DE INTERFAZ
 # ==========================================
-st.set_page_config(page_title="PASCA Inventory Smart", layout="wide")
+st.set_page_config(page_title="PASCA Inventory Editor", layout="wide")
 
 st.markdown("""
 <style>
-.stButton>button {
-    width: 100%;
-    height: 70px;
-    font-size: 20px !important;
+.stNumberInput label {
+    font-size: 16px !important;
     font-weight: bold !important;
-    border-radius: 12px !important;
-    border: 2px solid #4CAF50 !important;
-    margin-bottom: 10px;
 }
 .big-font {
-    font-size: 28px !important;
+    font-size: 32px !important;
     font-weight: bold;
     text-align: center;
-    color: #2E7D32;
+    color: #1B5E20;
+    background-color: #C8E6C9;
+    padding: 10px;
+    border-radius: 10px;
+    border: 2px solid #4CAF50;
 }
-.product-card {
-    background-color: #f0f2f6;
-    padding: 15px;
+.product-header {
+    background-color: #E8F5E9;
+    padding: 20px;
     border-radius: 15px;
-    border-left: 8px solid #4CAF50;
-    margin-bottom: 15px;
+    border-left: 10px solid #2E7D32;
+    margin-bottom: 20px;
 }
 </style>
 """, unsafe_allow_html=True)
 
 # ==========================================
-# UTILIDAD
+# UTILIDADES
 # ==========================================
 def clean_code(val):
     if pd.isna(val):
@@ -52,20 +51,12 @@ def clean_code(val):
 def load_pasca_data(file):
     wb = openpyxl.load_workbook(file)
 
-    df_pres = pd.read_excel(file, sheet_name='PRESENTACIÓN')
-    df_pres.columns = df_pres.columns.str.strip()
+    # SISTEMA
+    df_sistema = pd.read_excel(file, sheet_name='SISTEMA')
+    df_sistema.columns = df_sistema.columns.str.strip()
+    df_sistema.iloc[:, 0] = df_sistema.iloc[:, 0].apply(clean_code)
 
-    mapping_pres = {}
-
-    for _, row in df_pres.iterrows():
-        name = str(row['DESCRIPCION']).strip().upper()
-        code = clean_code(row['CODIGO'])
-        factor = row['PRESENTACION'] if pd.notnull(row['PRESENTACION']) else 1
-
-        mapping_pres[name] = {'factor': factor, 'code': code}
-        if code:
-            mapping_pres[code] = {'factor': factor, 'code': code}
-
+    # CONTEO_F
     df_conteo = pd.read_excel(file, sheet_name='CONTEO_F')
 
     header_row_index = 0
@@ -76,11 +67,9 @@ def load_pasca_data(file):
 
     df_conteo.columns = df_conteo.iloc[header_row_index].str.strip()
     df_conteo = df_conteo.iloc[header_row_index + 1:].reset_index(drop=True)
-
-    # limpiar códigos
     df_conteo.iloc[:, 0] = df_conteo.iloc[:, 0].apply(clean_code)
 
-    return df_conteo, wb, mapping_pres
+    return df_conteo, df_sistema, wb
 
 
 def save_to_excel(df_conteo, wb):
@@ -105,117 +94,126 @@ def save_to_excel(df_conteo, wb):
 # ==========================================
 # APP
 # ==========================================
-st.title("📦 PASCA Inventory Smart")
+st.title("📦 PASCA Inventory Editor")
+st.markdown("Busque un producto → Edite el renglón → Guarde cambios")
 
-# SIDEBAR
-with st.sidebar:
-    st.header("📍 Ubicación")
-    bodegas = ["BO1", "BO2", "BO3", "AL1", "AL2", "AL3"]
-    st.session_state.selected_bodega = st.selectbox("Bodega Actual", bodegas)
-    st.info("Modo: Búsqueda Rápida y Manual")
-
-# CARGA
 uploaded_file = st.file_uploader("Cargar Plantilla de Sistema", type=["xlsx"])
 
 if uploaded_file:
 
     if 'df_inv' not in st.session_state:
-        df_c, wb, mapping = load_pasca_data(uploaded_file)
+        df_c, df_s, wb = load_pasca_data(uploaded_file)
         st.session_state.df_inv = df_c
+        st.session_state.df_sistema = df_s
         st.session_state.wb_inv = wb
-        st.session_state.mapping_pres = mapping
 
-    df = st.session_state.df_inv
+    df_conteo = st.session_state.df_inv
+    df_sistema = st.session_state.df_sistema
     wb = st.session_state.wb_inv
-    mapping = st.session_state.mapping_pres
-
-    col_search, col_data = st.columns([1, 1])
 
     # ==========================================
-    # BUSCADOR
+    # BUSCAR PRODUCTO
     # ==========================================
-    with col_search:
-        st.subheader("🔍 Buscar Producto")
+    st.subheader("🔍 Buscar Producto")
 
-        search_term = st.text_input("Escribe el nombre o código...", "").strip().upper()
+    search_term = st.text_input("Ingrese Código o Nombre...").strip().upper()
 
-        if search_term:
-            matches = [k for k in mapping.keys() if search_term in k]
+    if search_term:
 
-            if matches:
-                st.write(f"Encontrados {len(matches)} productos:")
+        mask_s = (
+            (df_sistema.iloc[:, 0].astype(str) == search_term) |
+            (df_sistema.iloc[:, 1].astype(str).str.contains(search_term, case=False))
+        )
 
-                for m in matches[:15]:
-                    if st.button(f"👉 {m}"):
-                        st.session_state.selected_prod = m
-            else:
-                st.error("No se encontró coincidencia en la hoja 'PRESENTACIÓN'.")
+        res_sistema = df_sistema[mask_s]
 
-    # ==========================================
-    # CONTEO
-    # ==========================================
-    with col_data:
-        st.subheader("📝 Conteo")
+        if not res_sistema.empty:
 
-        if 'selected_prod' in st.session_state:
-            prod_key = st.session_state.selected_prod
-            prod_info = mapping[prod_key]
+            real_code = clean_code(res_sistema.iloc[0, 0])
+            prod_name = res_sistema.iloc[0, 1]
+            stock_sistema = res_sistema.iloc[0, 2]
 
-            factor = prod_info['factor']
-            code = prod_info['code']
-
-            mask = df.iloc[:, 0] == code
-            prod_row_idx = df[mask].index
+            mask_c = df_conteo.iloc[:, 0] == real_code
+            prod_row_idx = df_conteo[mask_c].index
 
             if not prod_row_idx.empty:
                 idx = prod_row_idx[0]
-                prod_name = df.iloc[idx, 1]
 
                 st.markdown(f"""
-                <div class="product-card">
-                    <div class="big-font">{prod_name}</div>
-                    <p><b>Código:</b> {code} | <b>Factor Caja:</b> {factor}</p>
+                <div class="product-header">
+                    <div style="font-size: 24px; font-weight: bold;">{prod_name}</div>
+                    <div style="font-size: 18px;">
+                        Código: {real_code} | <b>Stock Sistema: {stock_sistema}</b>
+                    </div>
                 </div>
                 """, unsafe_allow_html=True)
 
-                c1, c2 = st.columns(2)
+                # ==========================================
+                # INPUTS DE EDICIÓN
+                # ==========================================
+                st.write("### 📝 Ingreso de Cantidades")
 
-                with c1:
-                    cajas = st.number_input("📦 Cajas", min_value=0, step=1)
+                col_names = ["BO1", "BO2", "BO3", "AL1", "AL2", "AL3", "VALES", "VENCIDOS"]
+                current_values = df_conteo.iloc[idx, 3:11].values
 
-                with c2:
-                    sueltos = st.number_input("Unidades Sueltas", min_value=0, step=1)
+                inputs = {}
 
-                total = (cajas * factor) + sueltos
+                row1 = st.columns(4)
+                row2 = st.columns(4)
 
-                st.markdown(f"<div class='big-font'>Total: {total}</div>", unsafe_allow_html=True)
+                for i, col_name in enumerate(col_names):
+                    target_row = row1 if i < 4 else row2
 
-                if st.button("✅ Confirmar y Guardar"):
+                    with target_row[i % 4]:
+                        val = current_values[i]
+                        inputs[col_name] = st.number_input(
+                            col_name,
+                            min_value=0,
+                            value=int(val) if pd.notnull(val) else 0
+                        )
+
+                total_fisico = sum(inputs.values())
+
+                st.markdown(
+                    f"<div class='big-font'>TOTAL FÍSICO: {total_fisico}</div>",
+                    unsafe_allow_html=True
+                )
+
+                # ==========================================
+                # GUARDAR
+                # ==========================================
+                if st.button("✅ GUARDAR CAMBIOS EN EXCEL"):
 
                     bodega_map = {
                         "BO1": 3, "BO2": 4, "BO3": 5,
-                        "AL1": 6, "AL2": 7, "AL3": 8
+                        "AL1": 6, "AL2": 7, "AL3": 8,
+                        "VALES": 9, "VENCIDOS": 10
                     }
 
-                    col_idx = bodega_map[st.session_state.selected_bodega]
-                    df.iloc[idx, col_idx] = total
+                    for col_name, value in inputs.items():
+                        df_conteo.iloc[idx, bodega_map[col_name]] = value
+
+                    df_conteo.iloc[idx, 11] = total_fisico
 
                     st.balloons()
-                    st.success(f"Guardado {total} en {st.session_state.selected_bodega}")
+                    st.success(f"{prod_name} actualizado correctamente")
 
             else:
-                st.error(f"El código {code} no se encontró en la hoja 'CONTEO_F'.")
+                st.error("El producto está en SISTEMA pero no en CONTEO_F")
+
+        else:
+            st.error("El producto no existe en SISTEMA")
 
     # ==========================================
     # EXPORTAR
     # ==========================================
     st.divider()
 
-    if st.button("💾 EXPORTAR INVENTARIO FINAL"):
-        final_bytes = save_to_excel(df, wb)
+    if st.button("💾 EXPORTAR ARCHIVO FINAL"):
+        final_bytes = save_to_excel(df_conteo, wb)
 
         st.download_button(
-            label="Descargar Excel para Sistema",
+            label="Descargar Excel",
             data=final_bytes,
             file_name="INVENTARIO_PASCA_FINAL.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
