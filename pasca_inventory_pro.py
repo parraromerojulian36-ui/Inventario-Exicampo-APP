@@ -213,19 +213,17 @@ st.title("📦 PASCA Inventory Audit Pro")
 
 with st.sidebar:
     api_key = st.text_input("API Key", type="password")
-    model = st.selectbox("Modelo IA", [
-    "gemini-1.5-flash-latest",
-    "gemini-1.5-flash-001",
-    "gemini-2.0-flash"
-    ])
 
     import google.generativeai as genai
 
-    genai.configure(api_key="TU_API_KEY")
+    if api_key and st.checkbox("🔎 Ver modelos disponibles"):
+        genai.configure(api_key=api_key)
 
-    for m in genai.list_models():
-        if "generateContent" in m.supported_generation_methods:
-            print(m.name)
+        st.subheader("Modelos disponibles:")
+
+        for m in genai.list_models():
+            if "generateContent" in m.supported_generation_methods:
+                st.write(m.name)
 
     sucursal = st.selectbox("Sucursal", ["PASCA", "SUBIA", "SIBATE", "GRANADA"])
     fecha = datetime.now().strftime("%d-%m-%Y")
