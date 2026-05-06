@@ -218,6 +218,15 @@ with st.sidebar:
     "gemini-1.5-flash-001",
     "gemini-2.0-flash"
     ])
+
+    import google.generativeai as genai
+
+    genai.configure(api_key="TU_API_KEY")
+
+    for m in genai.list_models():
+        if "generateContent" in m.supported_generation_methods:
+            print(m.name)
+
     sucursal = st.selectbox("Sucursal", ["PASCA", "SUBIA", "SIBATE", "GRANADA"])
     fecha = datetime.now().strftime("%d-%m-%Y")
 
