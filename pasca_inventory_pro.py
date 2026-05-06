@@ -4,59 +4,65 @@ import openpyxl
 from io import BytesIO
 
 # ==========================================
-# CONFIGURACIÓN DE INTERFAZ
+# CONFIGURACIÓN UI
 # ==========================================
-st.set_page_config(page_title="PASCA Inventory Editor", layout="wide")
+st.set_page_config(page_title="PASCA Inventory Pro", layout="wide")
 
 st.markdown("""
 <style>
+.main { background-color: #f5f7f9; }
+
 .stNumberInput label {
-    font-size: 16px !important;
+    font-size: 18px !important;
     font-weight: bold !important;
 }
+
 .big-font {
-    font-size: 32px !important;
+    font-size: 36px !important;
     font-weight: bold;
     text-align: center;
-    color: #1B5E20;
-    background-color: #C8E6C9;
-    padding: 10px;
-    border-radius: 10px;
-    border: 2px solid #4CAF50;
-}
-.product-header {
-    background-color: #E8F5E9;
+    color: white;
+    background-color: #2E7D32;
     padding: 20px;
     border-radius: 15px;
-    border-left: 10px solid #2E7D32;
-    margin-bottom: 20px;
+    margin: 20px 0;
+}
+
+.product-header {
+    background-color: white;
+    padding: 25px;
+    border-radius: 20px;
+    border-left: 12px solid #4CAF50;
+    margin-bottom: 25px;
+}
+
+div.stButton > button {
+    width: 100%;
+    height: 60px;
+    font-size: 18px;
 }
 </style>
 """, unsafe_allow_html=True)
 
 # ==========================================
-# UTILIDAD
+# UTILIDADES
 # ==========================================
 def clean_code(val):
     if pd.isna(val):
         return ""
     s = str(val).strip()
-    if s.endswith('.0'):
-        s = s[:-2]
-    return s
+    return s[:-2] if s.endswith(".0") else s
 
 # ==========================================
-# LÓGICA DE DATOS
+# DATA
 # ==========================================
 def load_pasca_data(file):
     wb = openpyxl.load_workbook(file)
 
-    # SISTEMA
     df_sistema = pd.read_excel(file, sheet_name='SISTEMA')
     df_sistema.columns = df_sistema.columns.str.strip()
     df_sistema.iloc[:, 0] = df_sistema.iloc[:, 0].apply(clean_code)
 
-    # CONTEO_F
     df_conteo = pd.read_excel(file, sheet_name='CONTEO_F')
 
     header_row_index = 0
@@ -68,7 +74,6 @@ def load_pasca_data(file):
     df_conteo.columns = df_conteo.iloc[header_row_index].str.strip()
     df_conteo = df_conteo.iloc[header_row_index + 1:].reset_index(drop=True)
 
-    # Permitir tipos mixtos (evita errores al escribir)
     df_conteo = df_conteo.astype(object)
     df_conteo.iloc[:, 0] = df_conteo.iloc[:, 0].apply(clean_code)
 
@@ -86,9 +91,8 @@ def save_to_excel(df_conteo, wb):
                 break
 
     for i, row in df_conteo.iterrows():
-        row_num = start_row + i
-        for col_num, value in enumerate(row.values, 1):
-            sheet.cell(row=row_num, column=col_num).value = value
+        for j, val in enumerate(row.values, 1):
+            sheet.cell(row=start_row + i, column=j).value = val
 
     output = BytesIO()
     wb.save(output)
@@ -97,129 +101,114 @@ def save_to_excel(df_conteo, wb):
 # ==========================================
 # APP
 # ==========================================
-st.title("Inventario Exicampo")
-st.markdown("Busque un producto → Edite → Guarde")
+st.title("📦 PASCA Inventory Pro")
+st.markdown("Gestión de conteo físico inteligente")
 
-uploaded_file = st.file_uploader("Cargar Plantilla de Sistema", type=["xlsx"])
+uploaded_file = st.file_uploader("Sube el Excel", type=["xlsx"])
 
 if uploaded_file:
 
-    if 'df_inv' not in st.session_state:
+    if "data_loaded" not in st.session_state:
         df_c, df_s, wb = load_pasca_data(uploaded_file)
-        st.session_state.df_inv = df_c
+        st.session_state.df_conteo = df_c
         st.session_state.df_sistema = df_s
-        st.session_state.wb_inv = wb
+        st.session_state.wb = wb
+        st.session_state.data_loaded = True
 
-    df_conteo = st.session_state.df_inv
+    df_conteo = st.session_state.df_conteo
     df_sistema = st.session_state.df_sistema
-    wb = st.session_state.wb_inv
+    wb = st.session_state.wb
 
-    # ==========================================
-    # BUSCAR
-    # ==========================================
+    # ======================================
+    # BUSCADOR
+    # ======================================
     st.subheader("🔍 Buscar Producto")
 
-    search_term = st.text_input("Ingrese Código o Nombre...").strip().upper()
+    search = st.text_input("Código o nombre").upper().strip()
 
-    if search_term:
-
-        mask_s = (
-            (df_sistema.iloc[:, 0].astype(str) == search_term) |
-            (df_sistema.iloc[:, 1].astype(str).str.contains(search_term, case=False))
+    if search:
+        mask = (
+            (df_sistema.iloc[:, 0].astype(str) == search) |
+            (df_sistema.iloc[:, 1].astype(str).str.contains(search, case=False))
         )
 
-        res_sistema = df_sistema[mask_s]
+        results = df_sistema[mask]
 
-        if not res_sistema.empty:
+        if not results.empty:
+            if len(results) > 1:
+                st.warning("Selecciona una opción")
+                for _, r in results.iterrows():
+                    code = clean_code(r.iloc[0])
+                    name = r.iloc[1]
 
-            real_code = clean_code(res_sistema.iloc[0, 0])
-            prod_name = res_sistema.iloc[0, 1]
-            stock_sistema = res_sistema.iloc[0, 2]
-
-            mask_c = df_conteo.iloc[:, 0].astype(str) == real_code
-            prod_row_idx = df_conteo[mask_c].index
-
-            if not prod_row_idx.empty:
-                idx = prod_row_idx[0]
-
-                st.markdown(f"""
-                <div class="product-header">
-                    <div style="font-size: 24px; font-weight: bold;">{prod_name}</div>
-                    <div style="font-size: 18px;">
-                        Código: {real_code} | <b>Stock Sistema: {stock_sistema}</b>
-                    </div>
-                </div>
-                """, unsafe_allow_html=True)
-
-                # ==========================================
-                # INPUTS
-                # ==========================================
-                st.write("### 📝 Ingreso de Cantidades")
-
-                col_names = ["BO1", "BO2", "BO3", "AL1", "AL2", "AL3", "VALES", "VENCIDOS"]
-
-                raw_vals = df_conteo.iloc[idx, 3:11].values
-                current_values = [
-                    int(v) if pd.notnull(v) and str(v).replace('.', '').isdigit() else 0
-                    for v in raw_vals
-                ]
-
-                inputs = {}
-                row1 = st.columns(4)
-                row2 = st.columns(4)
-
-                for i, col_name in enumerate(col_names):
-                    target = row1 if i < 4 else row2
-                    with target[i % 4]:
-                        inputs[col_name] = st.number_input(
-                            col_name,
-                            min_value=0,
-                            value=current_values[i]
-                        )
-
-                total_fisico = sum(inputs.values())
-
-                st.markdown(
-                    f"<div class='big-font'>TOTAL FÍSICO: {total_fisico}</div>",
-                    unsafe_allow_html=True
-                )
-
-                # ==========================================
-                # GUARDAR
-                # ==========================================
-                if st.button("✅ GUARDAR CAMBIOS EN EXCEL"):
-
-                    bodega_map = {
-                        "BO1": 3, "BO2": 4, "BO3": 5,
-                        "AL1": 6, "AL2": 7, "AL3": 8,
-                        "VALES": 9, "VENCIDOS": 10
-                    }
-
-                    for col_name, value in inputs.items():
-                        df_conteo.iloc[idx, bodega_map[col_name]] = value
-
-                    df_conteo.iloc[idx, 11] = total_fisico
-
-                    st.balloons()
-                    st.success(f"{prod_name} actualizado correctamente")
-
+                    if st.button(f"{name} ({code})"):
+                        st.session_state.selected = (code, name)
             else:
-                st.error("Está en SISTEMA pero no en CONTEO_F")
+                r = results.iloc[0]
+                st.session_state.selected = (clean_code(r[0]), r[1])
+        else:
+            st.error("No encontrado")
+
+    # ======================================
+    # EDICIÓN
+    # ======================================
+    if "selected" in st.session_state:
+        code, name = st.session_state.selected
+
+        row_idx = df_conteo[df_conteo.iloc[:, 0] == code].index
+
+        if not row_idx.empty:
+            idx = row_idx[0]
+
+            st.markdown(f"""
+            <div class="product-header">
+                <b>{name}</b><br>
+                Código: {code}
+            </div>
+            """, unsafe_allow_html=True)
+
+            cols = ["BO1","BO2","BO3","AL1","AL2","AL3","VALES","VENCIDOS"]
+
+            vals = df_conteo.iloc[idx, 3:11].values
+            vals = [int(v) if pd.notnull(v) else 0 for v in vals]
+
+            inputs = {}
+
+            c1 = st.columns(4)
+            c2 = st.columns(4)
+
+            for i, col in enumerate(cols):
+                container = c1 if i < 4 else c2
+                with container[i % 4]:
+                    inputs[col] = st.number_input(col, value=vals[i], min_value=0)
+
+            total = sum(inputs.values())
+
+            st.markdown(f"<div class='big-font'>TOTAL: {total}</div>", unsafe_allow_html=True)
+
+            if st.button("Guardar", type="primary"):
+                map_cols = {
+                    "BO1":3,"BO2":4,"BO3":5,
+                    "AL1":6,"AL2":7,"AL3":8,
+                    "VALES":9,"VENCIDOS":10
+                }
+
+                for k,v in inputs.items():
+                    df_conteo.iloc[idx, map_cols[k]] = v
+
+                df_conteo.iloc[idx, 11] = total
+
+                st.success("Guardado")
+                st.balloons()
 
         else:
-            st.error("No existe en SISTEMA")
+            st.error("No está en CONTEO_F")
 
-    # ==========================================
+    # ======================================
     # EXPORTAR
-    # ==========================================
+    # ======================================
     st.divider()
 
-    if st.button("💾 EXPORTAR ARCHIVO FINAL"):
-        final_bytes = save_to_excel(df_conteo, wb)
-
-        st.download_button(
-            label="Descargar Excel",
-            data=final_bytes,
-            file_name="INVENTARIO_PASCA_FINAL.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        )
+    if st.button("Exportar Excel"):
+        data = save_to_excel(df_conteo, wb)
+        st.download_button("Descargar", data, "inventario.xlsx")
