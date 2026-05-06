@@ -31,20 +31,11 @@ st.markdown("""
     border-left: 12px solid #4CAF50;
     margin-bottom: 25px;
 }
-div.stButton > button {
-    width: 100%;
-    height: 60px;
-    font-size: 18px;
-}
-.stButton > button[kind="primary"] {
-    height: 80px;
-    font-size: 24px;
-}
 </style>
 """, unsafe_allow_html=True)
 
 # ==========================================
-# UTILIDADES
+# UTILIDAD
 # ==========================================
 def clean_code(val):
     if pd.isna(val):
@@ -105,23 +96,23 @@ uploaded_file = st.file_uploader("Sube el Excel del sistema", type=["xlsx"])
 
 if uploaded_file:
 
-    if 'data_loaded' not in st.session_state:
+    if 'loaded' not in st.session_state:
         df_c, df_s, wb = load_pasca_data(uploaded_file)
         st.session_state.df_conteo = df_c
         st.session_state.df_sistema = df_s
         st.session_state.wb = wb
-        st.session_state.data_loaded = True
+        st.session_state.loaded = True
 
     df_conteo = st.session_state.df_conteo
     df_sistema = st.session_state.df_sistema
     wb = st.session_state.wb
 
     # ======================================
-    # BUSCADOR
+    # BUSCAR
     # ======================================
     st.subheader("🔍 Buscar Producto")
 
-    search_term = st.text_input("Código o Nombre").strip().upper()
+    search_term = st.text_input("Código o nombre").strip().upper()
 
     if search_term:
 
@@ -141,7 +132,7 @@ if uploaded_file:
                     name = res.iloc[i, 1]
                     code = clean_code(res.iloc[i, 0])
 
-                    if st.button(f"{name} ({code})", key=f"btn_{code}_{i}"):
+                    if st.button(f"{name} ({code})", key=f"btn_{i}"):
                         st.session_state.selected = (code, name)
 
             else:
@@ -149,8 +140,9 @@ if uploaded_file:
                     clean_code(res.iloc[0, 0]),
                     res.iloc[0, 1]
                 )
+
         else:
-            st.error("No encontrado")
+            st.error("Producto no encontrado")
             if 'selected' in st.session_state:
                 del st.session_state.selected
 
@@ -166,59 +158,65 @@ if uploaded_file:
 
         row_idx = df_conteo[df_conteo.iloc[:, 0].astype(str) == code].index
 
-        if not row_idx.empty:
-            idx = row_idx[0]
+        # 🔥 CREAR PRODUCTO SI NO EXISTE
+        if row_idx.empty:
+            st.info(f"Agregando producto nuevo: {name}")
 
-            st.markdown(f"""
-            <div class="product-header">
-                <b>{name}</b><br>
-                Código: {code} | Stock: {stock_sys}
-            </div>
-            """, unsafe_allow_html=True)
+            new_row = [code, name] + [0]*10
+            df_conteo.loc[len(df_conteo)] = new_row
 
-            cols = ["BO1","BO2","BO3","AL1","AL2","AL3","VALES","VENCIDOS"]
+            row_idx = [len(df_conteo)-1]
+            st.session_state.df_conteo = df_conteo
 
-            raw = df_conteo.iloc[idx, 3:11].values
-            vals = [int(v) if pd.notnull(v) and str(v).replace('.', '').isdigit() else 0 for v in raw]
+        idx = row_idx[0]
 
-            inputs = {}
+        st.markdown(f"""
+        <div class="product-header">
+            <b>{name}</b><br>
+            Código: {code} | Stock Sistema: {stock_sys}
+        </div>
+        """, unsafe_allow_html=True)
 
-            r1 = st.columns(4)
-            r2 = st.columns(4)
+        cols = ["BO1","BO2","BO3","AL1","AL2","AL3","VALES","VENCIDOS"]
 
-            for i, col in enumerate(cols):
-                container = r1 if i < 4 else r2
-                with container[i % 4]:
-                    inputs[col] = st.number_input(col, value=vals[i], min_value=0)
+        raw = df_conteo.iloc[idx, 3:11].values
+        vals = [int(v) if pd.notnull(v) and str(v).replace('.', '').isdigit() else 0 for v in raw]
 
-            total = sum(inputs.values())
+        inputs = {}
 
-            st.markdown(f"<div class='big-font'>TOTAL: {total}</div>", unsafe_allow_html=True)
+        r1 = st.columns(4)
+        r2 = st.columns(4)
 
-            if st.button("Guardar", type="primary"):
+        for i, col in enumerate(cols):
+            container = r1 if i < 4 else r2
+            with container[i % 4]:
+                inputs[col] = st.number_input(col, value=vals[i], min_value=0)
 
-                map_cols = {
-                    "BO1":3,"BO2":4,"BO3":5,
-                    "AL1":6,"AL2":7,"AL3":8,
-                    "VALES":9,"VENCIDOS":10
-                }
+        total = sum(inputs.values())
 
-                for k, v in inputs.items():
-                    df_conteo.iloc[idx, map_cols[k]] = v
+        st.markdown(f"<div class='big-font'>TOTAL FÍSICO: {total}</div>", unsafe_allow_html=True)
 
-                df_conteo.iloc[idx, 11] = total
+        if st.button("Guardar", type="primary"):
 
-                st.success("Guardado correctamente")
-                st.balloons()
+            map_cols = {
+                "BO1":3,"BO2":4,"BO3":5,
+                "AL1":6,"AL2":7,"AL3":8,
+                "VALES":9,"VENCIDOS":10
+            }
 
-        else:
-            st.error("No existe en CONTEO_F")
+            for k, v in inputs.items():
+                df_conteo.iloc[idx, map_cols[k]] = v
+
+            df_conteo.iloc[idx, 11] = total
+
+            st.success("Guardado correctamente")
+            st.balloons()
 
     # ======================================
     # EXPORTAR
     # ======================================
     st.divider()
 
-    if st.button("💾 DESCARGAR EXCEL FINAL"):
-        data = save_to_excel(df_conteo, wb)
-        st.download_button("Descargar archivo", data, "inventario_final.xlsx")
+    if st.button("💾 Descargar Excel Final"):
+        file = save_to_excel(df_conteo, wb)
+        st.download_button("Descargar", file, "inventario_final.xlsx")
