@@ -2,9 +2,11 @@ import streamlit as st
 import pandas as pd
 import openpyxl
 from io import BytesIO
+import os
+import tempfile
 
 # ==========================================
-# CONFIGURACIÓN UI
+# CONFIG UI
 # ==========================================
 st.set_page_config(page_title="PASCA Inventory Pro", layout="wide")
 
@@ -22,20 +24,18 @@ st.markdown("""
     background-color: #2E7D32;
     padding: 20px;
     border-radius: 15px;
-    margin: 20px 0;
 }
 .product-header {
     background-color: white;
     padding: 25px;
     border-radius: 20px;
     border-left: 12px solid #4CAF50;
-    margin-bottom: 25px;
 }
 </style>
 """, unsafe_allow_html=True)
 
 # ==========================================
-# UTILIDAD
+# UTIL
 # ==========================================
 def clean_code(val):
     if pd.isna(val):
@@ -44,16 +44,21 @@ def clean_code(val):
     return s[:-2] if s.endswith(".0") else s
 
 # ==========================================
-# DATA
+# LOAD DATA (TEMP FILE FIX)
 # ==========================================
-def load_pasca_data(file):
-    wb = openpyxl.load_workbook(file)
+def load_pasca_data(uploaded_file):
 
-    df_sistema = pd.read_excel(file, sheet_name='SISTEMA')
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as tmp:
+        tmp.write(uploaded_file.getvalue())
+        tmp_path = tmp.name
+
+    wb = openpyxl.load_workbook(tmp_path)
+
+    df_sistema = pd.read_excel(tmp_path, sheet_name='SISTEMA')
     df_sistema.columns = df_sistema.columns.str.strip()
     df_sistema.iloc[:, 0] = df_sistema.iloc[:, 0].apply(clean_code)
 
-    df_conteo = pd.read_excel(file, sheet_name='CONTEO_F')
+    df_conteo = pd.read_excel(tmp_path, sheet_name='CONTEO_F')
 
     header_row_index = 0
     for i, row in df_conteo.iterrows():
@@ -66,10 +71,18 @@ def load_pasca_data(file):
     df_conteo = df_conteo.astype(object)
     df_conteo.iloc[:, 0] = df_conteo.iloc[:, 0].apply(clean_code)
 
+    st.session_state.temp_file_path = tmp_path
+
     return df_conteo, df_sistema, wb
 
-
+# ==========================================
+# SAVE DATA
+# ==========================================
 def save_to_excel(df_conteo, wb):
+
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as tmp:
+        final_path = tmp.name
+
     sheet = wb['CONTEO_F']
 
     start_row = 1
@@ -83,9 +96,20 @@ def save_to_excel(df_conteo, wb):
         for j, val in enumerate(row.values, 1):
             sheet.cell(row=start_row + i, column=j).value = val
 
-    output = BytesIO()
-    wb.save(output)
-    return output.getvalue()
+    wb.save(final_path)
+
+    with open(final_path, "rb") as f:
+        data = f.read()
+
+    # limpiar archivos temporales
+    try:
+        if "temp_file_path" in st.session_state:
+            os.remove(st.session_state.temp_file_path)
+        os.remove(final_path)
+    except:
+        pass
+
+    return data
 
 # ==========================================
 # APP
@@ -96,7 +120,7 @@ uploaded_file = st.file_uploader("Sube el Excel del sistema", type=["xlsx"])
 
 if uploaded_file:
 
-    if 'loaded' not in st.session_state:
+    if "loaded" not in st.session_state:
         df_c, df_s, wb = load_pasca_data(uploaded_file)
         st.session_state.df_conteo = df_c
         st.session_state.df_sistema = df_s
@@ -143,13 +167,13 @@ if uploaded_file:
 
         else:
             st.error("Producto no encontrado")
-            if 'selected' in st.session_state:
+            if "selected" in st.session_state:
                 del st.session_state.selected
 
     # ======================================
     # EDICIÓN
     # ======================================
-    if 'selected' in st.session_state:
+    if "selected" in st.session_state:
 
         code, name = st.session_state.selected
 
@@ -158,59 +182,53 @@ if uploaded_file:
 
         row_idx = df_conteo[df_conteo.iloc[:, 0].astype(str) == code].index
 
-        # 🔥 CREAR PRODUCTO SI NO EXISTE
-        if row_idx.empty:
-            st.info(f"Agregando producto nuevo: {name}")
+        if not row_idx.empty:
+            idx = row_idx[0]
 
-            new_row = [code, name] + [0]*10
-            df_conteo.loc[len(df_conteo)] = new_row
+            st.markdown(f"""
+            <div class="product-header">
+                <b>{name}</b><br>
+                Código: {code} | Stock Sistema: {stock_sys}
+            </div>
+            """, unsafe_allow_html=True)
 
-            row_idx = [len(df_conteo)-1]
-            st.session_state.df_conteo = df_conteo
+            cols = ["BO1","BO2","BO3","AL1","AL2","AL3","VALES","VENCIDOS"]
 
-        idx = row_idx[0]
+            raw = df_conteo.iloc[idx, 3:11].values
+            vals = [int(v) if pd.notnull(v) and str(v).replace('.', '').isdigit() else 0 for v in raw]
 
-        st.markdown(f"""
-        <div class="product-header">
-            <b>{name}</b><br>
-            Código: {code} | Stock Sistema: {stock_sys}
-        </div>
-        """, unsafe_allow_html=True)
+            inputs = {}
 
-        cols = ["BO1","BO2","BO3","AL1","AL2","AL3","VALES","VENCIDOS"]
+            r1 = st.columns(4)
+            r2 = st.columns(4)
 
-        raw = df_conteo.iloc[idx, 3:11].values
-        vals = [int(v) if pd.notnull(v) and str(v).replace('.', '').isdigit() else 0 for v in raw]
+            for i, col in enumerate(cols):
+                container = r1 if i < 4 else r2
+                with container[i % 4]:
+                    inputs[col] = st.number_input(col, value=vals[i], min_value=0)
 
-        inputs = {}
+            total = sum(inputs.values())
 
-        r1 = st.columns(4)
-        r2 = st.columns(4)
+            st.markdown(f"<div class='big-font'>TOTAL FÍSICO: {total}</div>", unsafe_allow_html=True)
 
-        for i, col in enumerate(cols):
-            container = r1 if i < 4 else r2
-            with container[i % 4]:
-                inputs[col] = st.number_input(col, value=vals[i], min_value=0)
+            if st.button("Guardar", type="primary"):
 
-        total = sum(inputs.values())
+                map_cols = {
+                    "BO1":3,"BO2":4,"BO3":5,
+                    "AL1":6,"AL2":7,"AL3":8,
+                    "VALES":9,"VENCIDOS":10
+                }
 
-        st.markdown(f"<div class='big-font'>TOTAL FÍSICO: {total}</div>", unsafe_allow_html=True)
+                for k, v in inputs.items():
+                    df_conteo.iloc[idx, map_cols[k]] = v
 
-        if st.button("Guardar", type="primary"):
+                df_conteo.iloc[idx, 11] = total
 
-            map_cols = {
-                "BO1":3,"BO2":4,"BO3":5,
-                "AL1":6,"AL2":7,"AL3":8,
-                "VALES":9,"VENCIDOS":10
-            }
+                st.success("Guardado correctamente")
+                st.balloons()
 
-            for k, v in inputs.items():
-                df_conteo.iloc[idx, map_cols[k]] = v
-
-            df_conteo.iloc[idx, 11] = total
-
-            st.success("Guardado correctamente")
-            st.balloons()
+        else:
+            st.error("No existe en CONTEO_F")
 
     # ======================================
     # EXPORTAR
