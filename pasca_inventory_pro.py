@@ -35,7 +35,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ==========================================
-# UTILIDADES
+# UTILIDAD
 # ==========================================
 def clean_code(val):
     if pd.isna(val):
@@ -67,6 +67,9 @@ def load_pasca_data(file):
 
     df_conteo.columns = df_conteo.iloc[header_row_index].str.strip()
     df_conteo = df_conteo.iloc[header_row_index + 1:].reset_index(drop=True)
+
+    # Permitir tipos mixtos (evita errores al escribir)
+    df_conteo = df_conteo.astype(object)
     df_conteo.iloc[:, 0] = df_conteo.iloc[:, 0].apply(clean_code)
 
     return df_conteo, df_sistema, wb
@@ -95,7 +98,7 @@ def save_to_excel(df_conteo, wb):
 # APP
 # ==========================================
 st.title("📦 PASCA Inventory Editor")
-st.markdown("Busque un producto → Edite el renglón → Guarde cambios")
+st.markdown("Busque un producto → Edite → Guarde")
 
 uploaded_file = st.file_uploader("Cargar Plantilla de Sistema", type=["xlsx"])
 
@@ -112,7 +115,7 @@ if uploaded_file:
     wb = st.session_state.wb_inv
 
     # ==========================================
-    # BUSCAR PRODUCTO
+    # BUSCAR
     # ==========================================
     st.subheader("🔍 Buscar Producto")
 
@@ -133,7 +136,7 @@ if uploaded_file:
             prod_name = res_sistema.iloc[0, 1]
             stock_sistema = res_sistema.iloc[0, 2]
 
-            mask_c = df_conteo.iloc[:, 0] == real_code
+            mask_c = df_conteo.iloc[:, 0].astype(str) == real_code
             prod_row_idx = df_conteo[mask_c].index
 
             if not prod_row_idx.empty:
@@ -149,27 +152,29 @@ if uploaded_file:
                 """, unsafe_allow_html=True)
 
                 # ==========================================
-                # INPUTS DE EDICIÓN
+                # INPUTS
                 # ==========================================
                 st.write("### 📝 Ingreso de Cantidades")
 
                 col_names = ["BO1", "BO2", "BO3", "AL1", "AL2", "AL3", "VALES", "VENCIDOS"]
-                current_values = df_conteo.iloc[idx, 3:11].values
+
+                raw_vals = df_conteo.iloc[idx, 3:11].values
+                current_values = [
+                    int(v) if pd.notnull(v) and str(v).replace('.', '').isdigit() else 0
+                    for v in raw_vals
+                ]
 
                 inputs = {}
-
                 row1 = st.columns(4)
                 row2 = st.columns(4)
 
                 for i, col_name in enumerate(col_names):
-                    target_row = row1 if i < 4 else row2
-
-                    with target_row[i % 4]:
-                        val = current_values[i]
+                    target = row1 if i < 4 else row2
+                    with target[i % 4]:
                         inputs[col_name] = st.number_input(
                             col_name,
                             min_value=0,
-                            value=int(val) if pd.notnull(val) else 0
+                            value=current_values[i]
                         )
 
                 total_fisico = sum(inputs.values())
@@ -199,10 +204,10 @@ if uploaded_file:
                     st.success(f"{prod_name} actualizado correctamente")
 
             else:
-                st.error("El producto está en SISTEMA pero no en CONTEO_F")
+                st.error("Está en SISTEMA pero no en CONTEO_F")
 
         else:
-            st.error("El producto no existe en SISTEMA")
+            st.error("No existe en SISTEMA")
 
     # ==========================================
     # EXPORTAR
