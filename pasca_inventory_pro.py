@@ -5,10 +5,10 @@ import os
 import tempfile
 from datetime import datetime
 from PIL import Image
+import pytesseract
+import cv2
 import numpy as np
-import easyocr
-
-from rapidfuzz import process, fuzz
+import re
 
 # ==========================================
 # CONFIGURACIÓN UI
@@ -49,18 +49,10 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ==========================================
-# OCR READER (GLOBAL)
-# ==========================================
-@st.cache_resource
-def load_reader():
-    return easyocr.Reader(['en'], gpu=False)
-
-reader = load_reader()
-
-# ==========================================
 # UTILIDADES
 # ==========================================
 def clean_code(val):
+
     if pd.isna(val):
         return ""
 
@@ -73,15 +65,177 @@ def clean_code(val):
 
 
 # ==========================================
-# CARGA EXCEL
+# PREPROCESAMIENTO OCR
+# ==========================================
+def preprocess_image(image):
+
+    img = np.array(image)
+
+    gray = cv2.cvtColor(
+        img,
+        cv2.COLOR_RGB2GRAY
+    )
+
+    gray = cv2.GaussianBlur(
+        gray,
+        (3, 3),
+        0
+    )
+
+    thresh = cv2.threshold(
+        gray,
+        0,
+        255,
+        cv2.THRESH_BINARY + cv2.THRESH_OTSU
+    )[1]
+
+    return thresh
+
+
+# ==========================================
+# OCR LOCAL
+# ==========================================
+def identify_product_local(image, df_sistema):
+
+    try:
+
+        processed = preprocess_image(image)
+
+        text = pytesseract.image_to_string(
+            processed
+        )
+
+        text = text.upper().strip()
+
+        st.info(f"OCR detectado: {text}")
+
+        # ======================================
+        # BUSCAR CODIGO
+        # ======================================
+        codes = (
+            df_sistema.iloc[:, 0]
+            .astype(str)
+            .tolist()
+        )
+
+        best_code = None
+        best_score = 0
+
+        for code in codes:
+
+            if code in text:
+                best_code = code
+                best_score = 100
+                break
+
+        if best_code:
+
+            row = df_sistema[
+                df_sistema.iloc[:, 0]
+                .astype(str) == best_code
+            ]
+
+            if not row.empty:
+
+                return {
+                    "code": best_code,
+                    "name": row.iloc[0, 1]
+                }
+
+        # ======================================
+        # BUSCAR NOMBRE
+        # ======================================
+        names = (
+            df_sistema.iloc[:, 1]
+            .astype(str)
+            .tolist()
+        )
+
+        best_name = None
+        best_words = 0
+
+        for name in names:
+
+            words = name.upper().split()
+
+            score = sum(
+                1 for w in words
+                if w in text
+            )
+
+            if score > best_words:
+                best_words = score
+                best_name = name
+
+        if best_name and best_words >= 1:
+
+            row = df_sistema[
+                df_sistema.iloc[:, 1]
+                .astype(str) == best_name
+            ]
+
+            if not row.empty:
+
+                return {
+                    "code": clean_code(row.iloc[0, 0]),
+                    "name": best_name
+                }
+
+        return None
+
+    except Exception as e:
+
+        st.error(str(e))
+        return None
+
+
+# ==========================================
+# AGREGAR PRODUCTO
+# ==========================================
+def add_product_to_conteo(
+    df_conteo,
+    code,
+    name
+):
+
+    exists = df_conteo[
+        df_conteo.iloc[:, 0]
+        .astype(str) == code
+    ]
+
+    if exists.empty:
+
+        new_row = (
+            [code, name] +
+            [0] * (len(df_conteo.columns) - 2)
+        )
+
+        df_conteo.loc[
+            len(df_conteo)
+        ] = new_row
+
+    return df_conteo
+
+
+# ==========================================
+# CARGAR EXCEL
 # ==========================================
 def load_pasca_data(uploaded_file):
 
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as tmp:
-        tmp.write(uploaded_file.getvalue())
+    with tempfile.NamedTemporaryFile(
+        delete=False,
+        suffix=".xlsx"
+    ) as tmp:
+
+        tmp.write(
+            uploaded_file.getvalue()
+        )
+
         tmp_path = tmp.name
 
-    wb = openpyxl.load_workbook(tmp_path)
+    wb = openpyxl.load_workbook(
+        tmp_path
+    )
 
     # ======================================
     # SISTEMA
@@ -91,7 +245,10 @@ def load_pasca_data(uploaded_file):
         sheet_name="SISTEMA"
     )
 
-    df_sistema.columns = df_sistema.columns.str.strip()
+    df_sistema.columns = (
+        df_sistema.columns
+        .str.strip()
+    )
 
     df_sistema.iloc[:, 0] = (
         df_sistema.iloc[:, 0]
@@ -110,7 +267,10 @@ def load_pasca_data(uploaded_file):
 
     for i, row in df_conteo.iterrows():
 
-        if "CODIGO" in str(row.values).upper():
+        if "CODIGO" in str(
+            row.values
+        ).upper():
+
             header_row = i
             break
 
@@ -138,143 +298,49 @@ def load_pasca_data(uploaded_file):
 
 
 # ==========================================
-# OCR + MATCH INTELIGENTE
-# ==========================================
-def identify_product_local(image, df_sistema):
-
-    try:
-        img = np.array(image)
-
-        # OCR
-        results = reader.readtext(img)
-
-        text = " ".join(
-            [r[1] for r in results]
-        ).upper()
-
-        # Mostrar OCR detectado
-        st.info(f"OCR leído: {text}")
-
-        # ======================================
-        # BUSCAR POR CÓDIGO
-        # ======================================
-        codes = (
-            df_sistema.iloc[:, 0]
-            .astype(str)
-            .tolist()
-        )
-
-        code_match = process.extractOne(
-            text,
-            codes,
-            scorer=fuzz.partial_ratio
-        )
-
-        if code_match and code_match[1] > 80:
-
-            matched_code = code_match[0]
-
-            row = df_sistema[
-                df_sistema.iloc[:, 0]
-                .astype(str) == matched_code
-            ]
-
-            if not row.empty:
-                return {
-                    "code": matched_code,
-                    "name": row.iloc[0, 1]
-                }
-
-        # ======================================
-        # BUSCAR POR NOMBRE
-        # ======================================
-        names = (
-            df_sistema.iloc[:, 1]
-            .astype(str)
-            .tolist()
-        )
-
-        name_match = process.extractOne(
-            text,
-            names,
-            scorer=fuzz.token_sort_ratio
-        )
-
-        if name_match and name_match[1] > 60:
-
-            matched_name = name_match[0]
-
-            row = df_sistema[
-                df_sistema.iloc[:, 1]
-                .astype(str) == matched_name
-            ]
-
-            if not row.empty:
-
-                return {
-                    "code": clean_code(row.iloc[0, 0]),
-                    "name": matched_name
-                }
-
-        return None
-
-    except Exception as e:
-        st.error(str(e))
-        return None
-
-
-# ==========================================
-# AGREGAR PRODUCTO
-# ==========================================
-def add_product_to_conteo(df_conteo, code, name):
-
-    exists = df_conteo[
-        df_conteo.iloc[:, 0]
-        .astype(str) == code
-    ]
-
-    if exists.empty:
-
-        new_row = (
-            [code, name] +
-            [0] * (len(df_conteo.columns) - 2)
-        )
-
-        df_conteo.loc[len(df_conteo)] = new_row
-
-    return df_conteo
-
-
-# ==========================================
 # EXPORTAR
 # ==========================================
-def save_full_audit(df_conteo, df_sistema, wb):
+def save_full_audit(
+    df_conteo,
+    df_sistema,
+    wb
+):
 
     # ======================================
-    # HOJA CONTEO
+    # CONTEO_F
     # ======================================
     sheet = wb["CONTEO_F"]
 
     start_row = 1
 
-    for row in sheet.iter_rows(max_row=10):
+    for row in sheet.iter_rows(
+        max_row=10
+    ):
 
         for cell in row:
 
             if (
                 cell.value and
-                "CODIGO" in str(cell.value).upper()
+                "CODIGO" in str(
+                    cell.value
+                ).upper()
             ):
 
-                start_row = cell.row + 1
+                start_row = (
+                    cell.row + 1
+                )
+
                 break
 
-    # Escribir conteo
+    # escribir
     for i, row in df_conteo.iterrows():
 
         row_num = start_row + i
 
-        for col_num, value in enumerate(row.values, 1):
+        for col_num, value in enumerate(
+            row.values,
+            1
+        ):
 
             sheet.cell(
                 row=row_num,
@@ -286,8 +352,9 @@ def save_full_audit(df_conteo, df_sistema, wb):
     # ======================================
     sheet_res = wb["RESULTADO"]
 
-    # limpiar
-    for row in sheet_res.iter_rows(min_row=5):
+    for row in sheet_res.iter_rows(
+        min_row=5
+    ):
 
         for cell in row:
             cell.value = None
@@ -296,13 +363,17 @@ def save_full_audit(df_conteo, df_sistema, wb):
 
     for _, row_c in df_conteo.iterrows():
 
-        code = clean_code(row_c.iloc[0])
+        code = clean_code(
+            row_c.iloc[0]
+        )
 
         name = row_c.iloc[1]
 
         total_fisico = (
             row_c.iloc[11]
-            if pd.notnull(row_c.iloc[11])
+            if pd.notnull(
+                row_c.iloc[11]
+            )
             else 0
         )
 
@@ -315,22 +386,63 @@ def save_full_audit(df_conteo, df_sistema, wb):
 
             total_sistema = (
                 match.iloc[0, 2]
-                if pd.notnull(match.iloc[0, 2])
+                if pd.notnull(
+                    match.iloc[0, 2]
+                )
                 else 0
             )
 
-            diff = total_fisico - total_sistema
+            diff = (
+                total_fisico -
+                total_sistema
+            )
 
-            faltante = abs(diff) if diff < 0 else 0
-            sobrante = diff if diff > 0 else 0
+            faltante = (
+                abs(diff)
+                if diff < 0
+                else 0
+            )
 
-            sheet_res.cell(row=row_res, column=1).value = code
-            sheet_res.cell(row=row_res, column=2).value = name
-            sheet_res.cell(row=row_res, column=3).value = total_fisico
-            sheet_res.cell(row=row_res, column=4).value = total_sistema
-            sheet_res.cell(row=row_res, column=5).value = diff
-            sheet_res.cell(row=row_res, column=6).value = faltante
-            sheet_res.cell(row=row_res, column=7).value = sobrante
+            sobrante = (
+                diff
+                if diff > 0
+                else 0
+            )
+
+            sheet_res.cell(
+                row=row_res,
+                column=1
+            ).value = code
+
+            sheet_res.cell(
+                row=row_res,
+                column=2
+            ).value = name
+
+            sheet_res.cell(
+                row=row_res,
+                column=3
+            ).value = total_fisico
+
+            sheet_res.cell(
+                row=row_res,
+                column=4
+            ).value = total_sistema
+
+            sheet_res.cell(
+                row=row_res,
+                column=5
+            ).value = diff
+
+            sheet_res.cell(
+                row=row_res,
+                column=6
+            ).value = faltante
+
+            sheet_res.cell(
+                row=row_res,
+                column=7
+            ).value = sobrante
 
             row_res += 1
 
@@ -347,8 +459,13 @@ def save_full_audit(df_conteo, df_sistema, wb):
         data = f.read()
 
     try:
-        os.remove(st.session_state.temp_file)
+
+        os.remove(
+            st.session_state.temp_file
+        )
+
         os.remove(path)
+
     except:
         pass
 
@@ -358,17 +475,25 @@ def save_full_audit(df_conteo, df_sistema, wb):
 # ==========================================
 # UI
 # ==========================================
-st.title("📦 PASCA Inventory Audit Pro")
+st.title(
+    "📦 PASCA Inventory Audit Pro"
+)
 
 with st.sidebar:
 
     sucursal = st.selectbox(
         "Sucursal",
-        ["PASCA", "SUBIA", "SIBATE", "GRANADA"]
+        [
+            "PASCA",
+            "SUBIA",
+            "SIBATE",
+            "GRANADA"
+        ]
     )
 
-    fecha = datetime.now().strftime("%d-%m-%Y")
-
+    fecha = datetime.now().strftime(
+        "%d-%m-%Y"
+    )
 
 uploaded_file = st.file_uploader(
     "Sube Excel",
@@ -385,8 +510,10 @@ if uploaded_file:
     # ======================================
     if "df_inv" not in st.session_state:
 
-        df_c, df_s, wb = load_pasca_data(
-            uploaded_file
+        df_c, df_s, wb = (
+            load_pasca_data(
+                uploaded_file
+            )
         )
 
         st.session_state.df_inv = df_c
@@ -410,7 +537,9 @@ if uploaded_file:
 
         img = Image.open(img_file)
 
-        with st.spinner("Analizando producto..."):
+        with st.spinner(
+            "Analizando..."
+        ):
 
             result = identify_product_local(
                 img,
@@ -423,7 +552,7 @@ if uploaded_file:
             name = result["name"]
 
             st.success(
-                f"Producto detectado: {name}"
+                f"Detectado: {name}"
             )
 
             st.session_state.df_inv = (
@@ -440,6 +569,7 @@ if uploaded_file:
             st.rerun()
 
         else:
+
             st.error(
                 "No se encontró coincidencia"
             )
@@ -447,7 +577,7 @@ if uploaded_file:
     # ======================================
     # BUSQUEDA MANUAL
     # ======================================
-    st.subheader("🔍 Buscar producto")
+    st.subheader("🔍 Buscar")
 
     search = st.text_input(
         "Código o nombre"
@@ -459,13 +589,19 @@ if uploaded_file:
             (
                 df_sistema.iloc[:, 0]
                 .astype(str)
-                .str.contains(search, case=False)
+                .str.contains(
+                    search,
+                    case=False
+                )
             )
             |
             (
                 df_sistema.iloc[:, 1]
                 .astype(str)
-                .str.contains(search, case=False)
+                .str.contains(
+                    search,
+                    case=False
+                )
             )
         )
 
@@ -563,15 +699,21 @@ if uploaded_file:
 
         for i, col_name in enumerate(cols):
 
-            container = row1 if i < 4 else row2
+            container = (
+                row1
+                if i < 4
+                else row2
+            )
 
             with container[i % 4]:
 
-                inputs[col_name] = st.number_input(
-                    col_name,
-                    min_value=0,
-                    value=int(values[i]),
-                    key=f"{code}_{col_name}"
+                inputs[col_name] = (
+                    st.number_input(
+                        col_name,
+                        min_value=0,
+                        value=int(values[i]),
+                        key=f"{code}_{col_name}"
+                    )
                 )
 
         total = sum(inputs.values())
@@ -581,11 +723,10 @@ if uploaded_file:
             unsafe_allow_html=True
         )
 
-        # diferencia
         diferencia = total - stock
 
         st.write(
-            f"📊 Diferencia sistema: {diferencia}"
+            f"📊 Diferencia: {diferencia}"
         )
 
         if st.button(
@@ -611,16 +752,21 @@ if uploaded_file:
                     map_cols[k]
                 ] = v
 
-            df_conteo.iloc[idx, 11] = total
+            df_conteo.iloc[
+                idx,
+                11
+            ] = total
 
             st.success(
-                "Producto guardado correctamente"
+                "Guardado correctamente"
             )
 
     # ======================================
-    # TABLA ACTUAL
+    # TABLA
     # ======================================
-    st.subheader("📊 Conteo actual")
+    st.subheader(
+        "📊 Conteo actual"
+    )
 
     st.dataframe(
         df_conteo,
@@ -632,7 +778,9 @@ if uploaded_file:
     # ======================================
     st.divider()
 
-    if st.button("📥 EXPORTAR RESULTADO"):
+    if st.button(
+        "📥 EXPORTAR RESULTADO"
+    ):
 
         data = save_full_audit(
             df_conteo,
