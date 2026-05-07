@@ -14,7 +14,7 @@ import pytesseract
 # CONFIG
 # ==========================================
 st.set_page_config(
-    page_title="PASCA Inventory Audit Pro",
+    page_title="Control Inventarios Exicampo",
     layout="wide"
 )
 
@@ -324,7 +324,7 @@ def save_full_audit(df_conteo, df_sistema, wb):
 # ==========================================
 # UI
 # ==========================================
-st.title("📦 PASCA Inventory Audit Pro")
+st.title("📦 Control Inventarios Exicampo")
 
 with st.sidebar:
 
