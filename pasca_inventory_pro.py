@@ -3,12 +3,12 @@ import pandas as pd
 import openpyxl
 import os
 import tempfile
+import difflib
+import html
+
 from datetime import datetime
 from PIL import Image
 import pytesseract
-import cv2
-import numpy as np
-from difflib import get_close_matches
 
 # ==========================================
 # CONFIG
@@ -19,62 +19,70 @@ st.set_page_config(
 )
 
 # ==========================================
-# CSS RESPONSIVE
+# CSS
 # ==========================================
 st.markdown("""
 <style>
 
-html, body, [class*="css"]  {
-    font-size: 16px;
+.block-container{
+    padding-top: 1rem;
 }
 
-.big-font {
-    font-size: 24px !important;
-    font-weight: bold !important;
-    text-align: center !important;
-    color: white !important;
-    background-color: #2E7D32 !important;
-    padding: 15px !important;
-    border-radius: 12px !important;
-    margin-top: 20px !important;
-}
-
-.product-card {
+.product-card{
     background: white;
     padding: 18px;
-    border-radius: 15px;
-    border-left: 8px solid #4CAF50;
-    margin-top: 15px;
-    margin-bottom: 20px;
-    box-shadow: 0px 2px 8px rgba(0,0,0,0.1);
+    border-radius: 16px;
+    border-left: 8px solid #2E7D32;
+    margin-bottom: 15px;
+    box-shadow: 0px 2px 10px rgba(0,0,0,0.08);
 }
 
-.stButton button {
-    width: 100%;
-    border-radius: 10px;
-    font-weight: bold;
+.product-card h3{
+    margin:0;
+    color:#2E7D32;
+    font-size:22px;
 }
 
-@media (max-width: 768px) {
+.big-total{
+    background:#2E7D32;
+    color:white;
+    text-align:center;
+    padding:18px;
+    border-radius:16px;
+    font-size:34px;
+    font-weight:bold;
+    margin-top:20px;
+}
 
-    .big-font {
-        font-size: 20px !important;
+.stButton button{
+    width:100%;
+    border-radius:12px;
+    height:50px;
+    font-weight:bold;
+}
+
+@media (max-width: 768px){
+
+    .product-card{
+        padding:14px;
     }
 
-    h1 {
-        font-size: 28px !important;
+    .product-card h3{
+        font-size:18px;
     }
 
+    .big-total{
+        font-size:26px;
+    }
 }
 
 </style>
 """, unsafe_allow_html=True)
 
 # ==========================================
-# LIMPIAR CODIGO
+# UTILIDADES
 # ==========================================
 def clean_code(val):
-
     if pd.isna(val):
         return ""
 
@@ -85,119 +93,99 @@ def clean_code(val):
 
     return val
 
-# ==========================================
-# OCR + MATCH INTELIGENTE
-# ==========================================
-def identify_product_ocr(image, df_sistema):
 
+# ==========================================
+# OCR
+# ==========================================
+def detect_text_ocr(image):
     try:
+        text = pytesseract.image_to_string(image, lang="eng")
 
-        img = np.array(image)
-        img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
+        text = text.upper()
+        text = text.replace("\n", " ")
+        text = text.replace("  ", " ")
 
-        # mejorar calidad
-        img = cv2.resize(img, None, fx=3, fy=3)
-
-        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-
-        gray = cv2.GaussianBlur(gray, (3,3), 0)
-
-        _, thresh = cv2.threshold(
-            gray,
-            0,
-            255,
-            cv2.THRESH_BINARY + cv2.THRESH_OTSU
-        )
-
-        text = pytesseract.image_to_string(
-            thresh,
-            config='--psm 6'
-        )
-
-        text = text.upper().strip()
-
-        if not text:
-            return None
-
-        # ==================================
-        # BUSQUEDA INTELIGENTE
-        # ==================================
-        nombres = (
-            df_sistema.iloc[:,1]
-            .astype(str)
-            .str.upper()
-            .tolist()
-        )
-
-        coincidencia = get_close_matches(
-            text,
-            nombres,
-            n=1,
-            cutoff=0.3
-        )
-
-        if coincidencia:
-
-            producto = coincidencia[0]
-
-            fila = df_sistema[
-                df_sistema.iloc[:,1]
-                .astype(str)
-                .str.upper() == producto
-            ]
-
-            if not fila.empty:
-
-                codigo = clean_code(fila.iloc[0,0])
-                stock = fila.iloc[0,2]
-
-                return {
-                    "texto": text,
-                    "producto": producto,
-                    "codigo": codigo,
-                    "stock": stock
-                }
-
-        return {
-            "texto": text,
-            "producto": None
-        }
+        return text.strip()
 
     except Exception as e:
+        return f"ERROR OCR: {str(e)}"
 
-        return {
-            "error": str(e)
-        }
+
+# ==========================================
+# BUSCADOR INTELIGENTE
+# ==========================================
+def search_product(df_sistema, detected_text):
+
+    detected_text = detected_text.upper()
+
+    # EXACTO
+    exact = df_sistema[
+        (
+            df_sistema.iloc[:, 0]
+            .astype(str)
+            .str.upper()
+            .str.contains(detected_text, na=False)
+        )
+        |
+        (
+            df_sistema.iloc[:, 1]
+            .astype(str)
+            .str.upper()
+            .str.contains(detected_text, na=False)
+        )
+    ]
+
+    if not exact.empty:
+        return exact
+
+    # SIMILAR
+    nombres = df_sistema.iloc[:, 1].astype(str).tolist()
+
+    similars = difflib.get_close_matches(
+        detected_text,
+        nombres,
+        n=10,
+        cutoff=0.2
+    )
+
+    if similars:
+        return df_sistema[
+            df_sistema.iloc[:, 1].astype(str).isin(similars)
+        ]
+
+    return pd.DataFrame()
+
 
 # ==========================================
 # CARGAR EXCEL
 # ==========================================
-def load_pasca_data(uploaded_file):
+def load_excel(uploaded_file):
 
     with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as tmp:
 
         tmp.write(uploaded_file.getvalue())
-        tmp_path = tmp.name
 
-    wb = openpyxl.load_workbook(tmp_path)
+        temp_path = tmp.name
+
+    wb = openpyxl.load_workbook(temp_path)
 
     # SISTEMA
     df_sistema = pd.read_excel(
-        tmp_path,
-        sheet_name='SISTEMA'
+        temp_path,
+        sheet_name="SISTEMA"
     )
 
     df_sistema.columns = df_sistema.columns.str.strip()
 
-    df_sistema.iloc[:,0] = (
-        df_sistema.iloc[:,0]
+    df_sistema.iloc[:, 0] = (
+        df_sistema.iloc[:, 0]
         .apply(clean_code)
     )
 
     # CONTEO
     df_conteo = pd.read_excel(
-        tmp_path,
-        sheet_name='CONTEO_F'
+        temp_path,
+        sheet_name="CONTEO_F"
     )
 
     header_row = 0
@@ -222,25 +210,29 @@ def load_pasca_data(uploaded_file):
 
     df_conteo = df_conteo.astype(object)
 
-    df_conteo.iloc[:,0] = (
-        df_conteo.iloc[:,0]
+    df_conteo.iloc[:, 0] = (
+        df_conteo.iloc[:, 0]
         .apply(clean_code)
     )
 
-    st.session_state.temp_file = tmp_path
+    st.session_state.temp_file = temp_path
 
     return df_conteo, df_sistema, wb
 
+
 # ==========================================
-# GUARDAR EXCEL
+# EXPORTAR
 # ==========================================
 def save_full_audit(df_conteo, df_sistema, wb):
 
-    sheet = wb['CONTEO_F']
+    # ======================================
+    # CONTEO_F
+    # ======================================
+    sheet = wb["CONTEO_F"]
 
     start_row = 1
 
-    for row in sheet.iter_rows(max_row=10):
+    for row in sheet.iter_rows(max_row=15):
 
         for cell in row:
 
@@ -249,7 +241,6 @@ def save_full_audit(df_conteo, df_sistema, wb):
                 start_row = cell.row + 1
                 break
 
-    # guardar conteo
     for i, row in df_conteo.iterrows():
 
         row_num = start_row + i
@@ -261,10 +252,12 @@ def save_full_audit(df_conteo, df_sistema, wb):
                 column=col_num
             ).value = value
 
+    # ======================================
     # RESULTADO
-    sheet_res = wb['RESULTADO']
+    # ======================================
+    result_sheet = wb["RESULTADO"]
 
-    for row in sheet_res.iter_rows(min_row=5):
+    for row in result_sheet.iter_rows(min_row=5):
 
         for cell in row:
 
@@ -275,38 +268,46 @@ def save_full_audit(df_conteo, df_sistema, wb):
     for _, row_c in df_conteo.iterrows():
 
         code = clean_code(row_c.iloc[0])
+
         name = row_c.iloc[1]
 
-        total_fisico = (
-            row_c.iloc[11]
-            if pd.notnull(row_c.iloc[11])
-            else 0
-        )
+        total_fisico = row_c.iloc[11]
+
+        if pd.isna(total_fisico):
+            total_fisico = 0
 
         match = df_sistema[
-            df_sistema.iloc[:,0].astype(str) == code
+            df_sistema.iloc[:, 0]
+            .astype(str)
+            == code
         ]
 
         if not match.empty:
 
-            total_sistema = (
-                match.iloc[0,2]
-                if pd.notnull(match.iloc[0,2])
-                else 0
-            )
+            total_sistema = match.iloc[0, 2]
 
-            diff = total_fisico - total_sistema
+            if pd.isna(total_sistema):
+                total_sistema = 0
 
-            sheet_res.cell(row=row_res, column=1).value = code
-            sheet_res.cell(row=row_res, column=2).value = name
-            sheet_res.cell(row=row_res, column=3).value = total_fisico
-            sheet_res.cell(row=row_res, column=4).value = total_sistema
-            sheet_res.cell(row=row_res, column=5).value = diff
-            sheet_res.cell(row=row_res, column=6).value = abs(diff) if diff < 0 else "-"
-            sheet_res.cell(row=row_res, column=7).value = diff if diff > 0 else "-"
+            diferencia = total_fisico - total_sistema
+
+            faltantes = abs(diferencia) if diferencia < 0 else 0
+
+            sobrantes = diferencia if diferencia > 0 else 0
+
+            result_sheet.cell(row=row_res, column=1).value = code
+            result_sheet.cell(row=row_res, column=2).value = name
+            result_sheet.cell(row=row_res, column=3).value = total_fisico
+            result_sheet.cell(row=row_res, column=4).value = total_sistema
+            result_sheet.cell(row=row_res, column=5).value = diferencia
+            result_sheet.cell(row=row_res, column=6).value = faltantes
+            result_sheet.cell(row=row_res, column=7).value = sobrantes
 
             row_res += 1
 
+    # ======================================
+    # GUARDAR
+    # ======================================
     with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as tmp:
 
         path = tmp.name
@@ -319,6 +320,7 @@ def save_full_audit(df_conteo, df_sistema, wb):
 
     return data
 
+
 # ==========================================
 # UI
 # ==========================================
@@ -326,15 +328,17 @@ st.title("📦 PASCA Inventory Audit Pro")
 
 with st.sidebar:
 
+    st.header("Configuración")
+
     sucursal = st.selectbox(
         "Sucursal",
-        ["PASCA","SUBIA","SIBATE","GRANADA"]
+        ["PASCA", "SUBIA", "SIBATE", "GRANADA"]
     )
 
     fecha = datetime.now().strftime("%d-%m-%Y")
 
 uploaded_file = st.file_uploader(
-    "Sube el Excel",
+    "Sube Excel",
     type=["xlsx"]
 )
 
@@ -343,9 +347,10 @@ uploaded_file = st.file_uploader(
 # ==========================================
 if uploaded_file:
 
+    # CARGAR
     if "df_inv" not in st.session_state:
 
-        df_c, df_s, wb = load_pasca_data(uploaded_file)
+        df_c, df_s, wb = load_excel(uploaded_file)
 
         st.session_state.df_inv = df_c
         st.session_state.df_sistema = df_s
@@ -356,62 +361,80 @@ if uploaded_file:
     wb = st.session_state.wb
 
     # ======================================
-    # CAMARA
+    # OCR
     # ======================================
-    st.subheader("📷 Escanear Producto")
+    st.subheader("📷 Cámara OCR")
 
     img_file = st.camera_input(
-        "Tomar foto"
+        "Tomar foto del producto"
     )
 
     if img_file:
 
-        img = Image.open(img_file)
+        image = Image.open(img_file)
 
-        with st.spinner("Analizando producto..."):
+        with st.spinner("Leyendo etiqueta..."):
 
-            detected = identify_product_ocr(
-                img,
-                df_sistema
-            )
+            detected_text = detect_text_ocr(image)
 
-        if not detected:
+        st.success(f"OCR Detectó: {detected_text}")
 
-            st.error("No se pudo detectar.")
+        results = search_product(
+            df_sistema,
+            detected_text
+        )
 
-        elif "error" in detected:
+        if results.empty:
 
-            st.error(detected["error"])
-
-        elif detected["producto"]:
-
-            st.success("✅ Producto encontrado")
-
-            st.markdown(f"""
-            <div class="product-card">
-
-            <h3>{detected['producto']}</h3>
-
-            <b>Código:</b> {detected['codigo']}<br>
-            <b>Stock Sistema:</b> {detected['stock']}<br>
-            <b>OCR Detectó:</b> {detected['texto']}
-
-            </div>
-            """, unsafe_allow_html=True)
-
-            st.session_state.selected_code = detected["codigo"]
-            st.session_state.selected_name = detected["producto"]
+            st.error("No se encontraron productos.")
 
         else:
 
-            st.warning(
-                f"OCR detectó: {detected['texto']}"
-            )
+            st.write("### Productos encontrados")
+
+            for idx in results.index:
+
+                product_name = str(results.loc[idx].iloc[1])
+
+                product_code = clean_code(
+                    results.loc[idx].iloc[0]
+                )
+
+                stock = results.loc[idx].iloc[2]
+
+                safe_name = html.escape(product_name)
+                safe_code = html.escape(product_code)
+                safe_stock = html.escape(str(stock))
+                safe_detected = html.escape(str(detected_text))
+
+                st.markdown(f"""
+                <div class="product-card">
+
+                    <h3>{safe_name}</h3>
+
+                    <p><b>Código:</b> {safe_code}</p>
+
+                    <p><b>Stock Sistema:</b> {safe_stock}</p>
+
+                    <p><b>OCR Detectó:</b> {safe_detected}</p>
+
+                </div>
+                """, unsafe_allow_html=True)
+
+                if st.button(
+                    f"Seleccionar {product_code}",
+                    key=f"ocr_{product_code}"
+                ):
+
+                    st.session_state.selected_code = product_code
+                    st.session_state.selected_name = product_name
+
+                    st.rerun()
 
     # ======================================
     # BUSQUEDA MANUAL
     # ======================================
-    st.subheader("🔍 Buscar Manual")
+    st.subheader("🔍 Buscar manualmente")
 
     search = st.text_input(
         "Código o nombre"
@@ -420,34 +443,47 @@ if uploaded_file:
     if search:
 
         mask = (
-            (df_sistema.iloc[:,0].astype(str) == search)
+            (
+                df_sistema.iloc[:, 0]
+                .astype(str)
+                .str.contains(search, na=False)
+            )
             |
             (
-                df_sistema.iloc[:,1]
+                df_sistema.iloc[:, 1]
                 .astype(str)
-                .str.contains(search, case=False)
+                .str.upper()
+                .str.contains(search, na=False)
             )
         )
 
-        resultados = df_sistema[mask]
+        results = df_sistema[mask]
 
-        for idx in resultados.index:
+        for idx in results.index:
 
-            name = resultados.iloc[
-                resultados.index.get_loc(idx),
-                1
-            ]
+            name = results.loc[idx].iloc[1]
 
             code = clean_code(
-                resultados.iloc[
-                    resultados.index.get_loc(idx),
-                    0
-                ]
+                results.loc[idx].iloc[0]
             )
 
+            stock = results.loc[idx].iloc[2]
+
+            st.markdown(f"""
+            <div class="product-card">
+
+            <h3>{name}</h3>
+
+            <p><b>Código:</b> {code}</p>
+
+            <p><b>Stock Sistema:</b> {stock}</p>
+
+            </div>
+            """, unsafe_allow_html=True)
+
             if st.button(
-                f"{name} ({code})",
-                key=f"bus_{code}"
+                f"Seleccionar {code}",
+                key=f"manual_{code}"
             ):
 
                 st.session_state.selected_code = code
@@ -464,27 +500,31 @@ if uploaded_file:
         name = st.session_state.selected_name
 
         match = df_sistema[
-            df_sistema.iloc[:,0].astype(str) == code
+            df_sistema.iloc[:, 0]
+            .astype(str)
+            == code
         ]
 
         stock = (
-            match.iloc[0,2]
+            match.iloc[0, 2]
             if not match.empty
             else 0
         )
 
         idxs = df_conteo[
-            df_conteo.iloc[:,0].astype(str) == code
+            df_conteo.iloc[:, 0]
+            .astype(str)
+            == code
         ].index
 
         if idxs.empty:
 
-            nueva_fila = [0] * len(df_conteo.columns)
+            new_row = [0] * len(df_conteo.columns)
 
-            nueva_fila[0] = code
-            nueva_fila[1] = name
+            new_row[0] = code
+            new_row[1] = name
 
-            df_conteo.loc[len(df_conteo)] = nueva_fila
+            df_conteo.loc[len(df_conteo)] = new_row
 
             idx = len(df_conteo) - 1
 
@@ -497,13 +537,14 @@ if uploaded_file:
 
         <h3>{name}</h3>
 
-        <b>Código:</b> {code}<br>
-        <b>Stock Sistema:</b> {stock}
+        <p><b>Código:</b> {code}</p>
+
+        <p><b>Stock Sistema:</b> {stock}</p>
 
         </div>
         """, unsafe_allow_html=True)
 
-        cols_names = [
+        bodegas = [
             "BO1",
             "BO2",
             "BO3",
@@ -514,38 +555,41 @@ if uploaded_file:
             "VENCIDOS"
         ]
 
-        valores = (
-            df_conteo.iloc[idx, 3:11]
-            .fillna(0)
-            .astype(int)
-            .tolist()
-        )
+        values = []
+
+        for i in range(3, 11):
+
+            try:
+
+                val = df_conteo.iloc[idx, i]
+
+                if pd.isna(val):
+                    val = 0
+
+                values.append(int(val))
+
+            except:
+                values.append(0)
 
         inputs = {}
 
-        row1 = st.columns(2)
-        row2 = st.columns(2)
-        row3 = st.columns(2)
-        row4 = st.columns(2)
+        cols = st.columns(2)
 
-        filas = [row1, row2, row3, row4]
+        for i, bodega in enumerate(bodegas):
 
-        for i, col in enumerate(cols_names):
+            with cols[i % 2]:
 
-            fila_actual = filas[i // 2]
-
-            with fila_actual[i % 2]:
-
-                inputs[col] = st.number_input(
-                    col,
+                inputs[bodega] = st.number_input(
+                    bodega,
                     min_value=0,
-                    value=int(valores[i])
+                    value=values[i],
+                    key=f"{code}_{bodega}"
                 )
 
         total = sum(inputs.values())
 
         st.markdown(f"""
-        <div class="big-font">
+        <div class="big-total">
         TOTAL: {total}
         </div>
         """, unsafe_allow_html=True)
@@ -555,7 +599,7 @@ if uploaded_file:
             type="primary"
         ):
 
-            map_cols = {
+            mapa = {
                 "BO1":3,
                 "BO2":4,
                 "BO3":5,
@@ -568,11 +612,11 @@ if uploaded_file:
 
             for k, v in inputs.items():
 
-                df_conteo.iloc[idx, map_cols[k]] = v
+                df_conteo.iloc[idx, mapa[k]] = v
 
-            df_conteo.iloc[idx,11] = total
+            df_conteo.iloc[idx, 11] = total
 
-            st.success("Guardado correctamente")
+            st.success("Producto guardado")
 
     # ======================================
     # EXPORTAR
@@ -587,13 +631,11 @@ if uploaded_file:
             wb
         )
 
-        filename = (
-            f"INVENTARIO_{sucursal}_{fecha}.xlsx"
-        )
+        filename = f"INVENTARIO_{sucursal}_{fecha}.xlsx"
 
         st.download_button(
             "Descargar Excel",
-            data=data,
+            data,
             file_name=filename,
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
